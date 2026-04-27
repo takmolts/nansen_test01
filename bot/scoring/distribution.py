@@ -9,7 +9,7 @@ from typing import Any
 
 from bot.scoring.types import CategoryScore
 
-WEIGHT = 8 / 65
+RAW_WEIGHT_PCT = 8
 RAW_MAX = 75  # th(35) + t10(40)
 
 
@@ -17,7 +17,9 @@ def calculate(
     *,
     holder_pcts_desc: list[float],
     total_holders: int | None,
+    weight_total_pct: int,
 ) -> CategoryScore:
+    WEIGHT = RAW_WEIGHT_PCT / weight_total_pct
     """
     holder_pcts_desc: ホルダーの保有率を降順で並べたリスト (%単位)
     total_holders: トークン全体のホルダー数 (token-info の spot_metrics 由来)

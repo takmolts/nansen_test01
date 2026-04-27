@@ -17,6 +17,7 @@ class Config:
     discord_bot_token: str
     nansen_api_key: str
     nansen_base_url: str
+    solana_rpc_url: str
     allowed_channel_ids: frozenset[int]
     dev_guild_id: int | None
     response_mode: str
@@ -29,6 +30,9 @@ class Config:
         token = _require("DISCORD_BOT_TOKEN")
         nansen_key = _require("NANSEN_API_KEY")
         base_url = os.getenv("NANSEN_BASE_URL", "https://api.nansen.ai").rstrip("/")
+        solana_rpc = os.getenv(
+            "SOLANA_RPC_URL", "https://api.mainnet-beta.solana.com"
+        ).rstrip("/")
 
         raw_channels = os.getenv("ALLOWED_CHANNEL_IDS", "").strip()
         channels: frozenset[int] = frozenset()
@@ -52,6 +56,7 @@ class Config:
             discord_bot_token=token,
             nansen_api_key=nansen_key,
             nansen_base_url=base_url,
+            solana_rpc_url=solana_rpc,
             allowed_channel_ids=channels,
             dev_guild_id=dev_guild_id,
             response_mode=raw_mode,

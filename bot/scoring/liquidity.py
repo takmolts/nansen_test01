@@ -9,10 +9,11 @@ from typing import Any
 from bot.scoring._helpers import get_dict, to_float, unwrap_data
 from bot.scoring.types import CategoryScore
 
-WEIGHT = 12 / 65
+RAW_WEIGHT_PCT = 12
 
 
-def calculate(token_info: Any) -> CategoryScore:
+def calculate(token_info: Any, *, weight_total_pct: int) -> CategoryScore:
+    WEIGHT = RAW_WEIGHT_PCT / weight_total_pct
     if isinstance(token_info, BaseException) or not isinstance(token_info, dict):
         return CategoryScore("Liquidity", "💧", 0.0, WEIGHT, note="データなし")
 

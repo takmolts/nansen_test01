@@ -10,11 +10,11 @@ from typing import Any
 from bot.scoring._helpers import to_float
 from bot.scoring.types import CategoryScore
 
-# 元の SM 20% を 65% 中で正規化 → 20/65
-WEIGHT = 20 / 65
+RAW_WEIGHT_PCT = 20
 
 
-def calculate(who_bought_sold: Any) -> CategoryScore:
+def calculate(who_bought_sold: Any, *, weight_total_pct: int) -> CategoryScore:
+    WEIGHT = RAW_WEIGHT_PCT / weight_total_pct
     if isinstance(who_bought_sold, BaseException) or who_bought_sold is None:
         return CategoryScore(
             name="Smart Money", emoji="🧠",

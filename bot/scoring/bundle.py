@@ -9,7 +9,7 @@ from typing import Any
 
 from bot.scoring.types import CategoryScore
 
-WEIGHT = 13 / 65
+RAW_WEIGHT_PCT = 13
 RAW_MAX = 70  # whale_count(30) + bundle_detect(40)
 
 
@@ -17,7 +17,9 @@ def calculate(
     *,
     whales: list[dict[str, Any]],
     clusters: list[tuple[str, list[dict[str, Any]]]],
+    weight_total_pct: int,
 ) -> CategoryScore:
+    WEIGHT = RAW_WEIGHT_PCT / weight_total_pct
     """
     whales:   3%超ホルダーのリスト (deployer/CEX除外は MVP では未実装)
     clusters: [(funder, [holder_dict, ...]), ...] 2件以上のホルダーを共有する funder のみ

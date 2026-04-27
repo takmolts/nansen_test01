@@ -25,6 +25,11 @@ CREDIT_COST: dict[str, int] = {
     "holders": 5,
     "who_bought_sold": 1,
     "related_wallets": 1,
+    "labels": 1,
+    "transactions": 1,
+    "pnl_summary": 1,
+    "nansen_indicators": 1,
+    "flow_intelligence": 1,
 }
 
 API_PREFIX = "/api/v1"
@@ -135,6 +140,34 @@ class NansenClient:
             credit_key="holders",
         )
 
+    async def nansen_indicators(self, token_address: str) -> Any:
+        """Nansen 独自リスク/リワード指標。"""
+        return await self._post(
+            "/tgm/nansen-indicators",
+            {
+                "chain": self._chain,
+                "token_address": token_address,
+            },
+            credit_key="nansen_indicators",
+        )
+
+    async def flow_intelligence(
+        self,
+        token_address: str,
+        *,
+        timeframe: str = "1d",
+    ) -> Any:
+        """カテゴリ別ネットフロー (CEX / Whale / Smart Trader 等)。"""
+        return await self._post(
+            "/tgm/flow-intelligence",
+            {
+                "chain": self._chain,
+                "token_address": token_address,
+                "timeframe": timeframe,
+            },
+            credit_key="flow_intelligence",
+        )
+
     async def who_bought_sold(
         self,
         token_address: str,
@@ -182,4 +215,54 @@ class NansenClient:
                 ],
             },
             credit_key="related_wallets",
+        )
+
+    async def labels(self, address: str, *, per_page: int = 50) -> Any:
+        """address のラベル一覧を取得 (smart_money / behavioral / scam etc.)。"""
+        return await self._post(
+            "/profiler/address/labels",
+            {
+                "address": address,
+                "chain": self._chain,
+                "pagination": {"page": 1, "per_page": per_page},
+            },
+            credit_key="labels",
+        )
+
+    async def oldest_transaction(
+        self,
+        address: str,
+        *,
+        days_back: int = 365 * 10,
+    ) -> Any:
+        """過去 days_back 日からアカウント年齢計算用に最古 1 件の Tx を取得。"""
+        now = datetime.now(timezone.utc)
+        date_from = (now - timedelta(days=days_back)).strftime("%Y-%m-%dT00:00:00Z")
+        date_to = now.strftime("%Y-%m-%dT23:59:59Z")
+        return await self._post(
+            "/profiler/address/transactions",
+            {
+                "address": address,
+                "chain": self._chain,
+                "date": {"from": date_from, "to": date_to},
+                "pagination": {"page": 1, "per_page": 1},
+                "order_by": [
+                    {"field": "block_timestamp", "direction": "ASC"},
+                ],
+            },
+            credit_key="transactions",
+        )
+
+    async def pnl_summary(self, address: str, *, days_back: int = 365 * 10) -> Any:
+        now = datetime.now(timezone.utc)
+        date_from = (now - timedelta(days=days_back)).strftime("%Y-%m-%dT00:00:00Z")
+        date_to = now.strftime("%Y-%m-%dT23:59:59Z")
+        return await self._post(
+            "/profiler/address/pnl-summary",
+            {
+                "address": address,
+                "chain": self._chain,
+                "date": {"from": date_from, "to": date_to},
+            },
+            credit_key="pnl_summary",
         )

@@ -522,7 +522,7 @@ def build_summary_embed(scores: "TotalScore", symbol: str) -> discord.Embed:
             f"{c.emoji} {c.name:<{name_width}}  {c.score:5.1f}  {bar}"
         )
     desc_lines.append("```")
-    desc_lines.append("\n*フェーズA: 5カテゴリで暫定算出 (Risk / Deployer / Narrative は未実装)*")
+    desc_lines.append("\n*フェーズB2: 7カテゴリで暫定算出 (Narrative は未実装)*")
 
     embed = discord.Embed(
         title=title,

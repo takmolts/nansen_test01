@@ -14,6 +14,7 @@ from bot.config import RESPONSE_MODE_INLINE, RESPONSE_MODE_THREAD, Config
 from bot.nansen_client import NansenAPIError, NansenClient
 from bot.scoring import engine as scoring_engine
 from bot.scoring.types import TotalScore
+from bot.solana_rpc import SolanaRPCClient, SolanaRPCError
 from bot.views import ResultView
 
 logger = logging.getLogger(__name__)
@@ -67,6 +68,7 @@ class CheckCog(commands.Cog):
             result = await _run_analysis(
                 api_key=self.config.nansen_api_key,
                 base_url=self.config.nansen_base_url,
+                solana_rpc_url=self.config.solana_rpc_url,
                 token_address=ca,
             )
         except Exception:
@@ -109,14 +111,43 @@ class _AnalysisResult:
         self.scores = scores
 
 
-async def _run_analysis(*, api_key: str, base_url: str, token_address: str) -> _AnalysisResult:
+async def _run_analysis(
+    *,
+    api_key: str,
+    base_url: str,
+    solana_rpc_url: str,
+    token_address: str,
+) -> _AnalysisResult:
     async with NansenClient(api_key, base_url, chain="solana") as client:
-        token_info_r, holders_r, sm_r = await asyncio.gather(
+        # 並列: token-info / holders / who-bought-sold + Solana RPC で deployer 取得
+        async def _fetch_deployer() -> tuple[bool, str | None]:
+            try:
+                async with SolanaRPCClient(solana_rpc_url) as rpc:
+                    return await rpc.fetch_mint_authority(token_address)
+            except Exception:
+                logger.exception("mint authority 取得失敗")
+                return False, None
+
+        (
+            token_info_r,
+            holders_r,
+            sm_r,
+            deployer_result,
+            indicators_r,
+            flow_r,
+        ) = await asyncio.gather(
             client.token_information(token_address),
             client.holders(token_address),
             client.who_bought_sold(token_address),
+            _fetch_deployer(),
+            client.nansen_indicators(token_address),
+            client.flow_intelligence(token_address),
             return_exceptions=True,
         )
+        if isinstance(deployer_result, BaseException):
+            deployer_fetched, deployer_addr = False, None
+        else:
+            deployer_fetched, deployer_addr = deployer_result
 
         holders_list: list[dict] = []
         if not isinstance(holders_r, BaseException):
@@ -161,6 +192,18 @@ async def _run_analysis(*, api_key: str, base_url: str, token_address: str) -> _
             clusters = [(f, ws) for f, ws in funder_map.items() if len(ws) >= 2]
             clusters.sort(key=lambda c: len(c[1]), reverse=True)
 
+        # Deployer Trust 用データ取得 (mintAuthority があるときのみ)
+        deployer_labels_r: Any = None
+        deployer_tx_r: Any = None
+        deployer_pnl_r: Any = None
+        if isinstance(deployer_addr, str) and deployer_addr:
+            deployer_labels_r, deployer_tx_r, deployer_pnl_r = await asyncio.gather(
+                client.labels(deployer_addr),
+                client.oldest_transaction(deployer_addr),
+                client.pnl_summary(deployer_addr),
+                return_exceptions=True,
+            )
+
         credits_used = client.credits_used
 
     symbol = _extract_symbol(token_info_r)
@@ -177,6 +220,13 @@ async def _run_analysis(*, api_key: str, base_url: str, token_address: str) -> _
         total_holders=total_holders,
         whales=whales_sorted,
         clusters=clusters,
+        deployer_address=deployer_addr if isinstance(deployer_addr, str) else None,
+        deployer_fetched=deployer_fetched,
+        deployer_labels=None if isinstance(deployer_labels_r, BaseException) else deployer_labels_r,
+        deployer_transactions=None if isinstance(deployer_tx_r, BaseException) else deployer_tx_r,
+        deployer_pnl=None if isinstance(deployer_pnl_r, BaseException) else deployer_pnl_r,
+        nansen_indicators=None if isinstance(indicators_r, BaseException) else indicators_r,
+        flow_intelligence=None if isinstance(flow_r, BaseException) else flow_r,
     )
 
     embed_list: list[discord.Embed] = []

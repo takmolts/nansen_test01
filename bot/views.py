@@ -83,8 +83,8 @@ class ResultView(discord.ui.View):
         )
         embed.set_footer(
             text=(
-                "フェーズA: 5カテゴリ暫定算出。 "
-                "Risk / Deployer Trust / Narrative は別 API 連携待ち"
+                "フェーズB2: 7カテゴリ暫定算出。 "
+                "Narrative は別 API 連携待ち"
             )
         )
         return embed
@@ -223,6 +223,62 @@ def _format_breakdown(name: str, breakdown: dict, note: str) -> str:
         if mcs is not None:
             lines.append(f"・最大クラスタサイズ: {mcs} (検出 {cc} 件) → {_fmt(bs)} / 40pt")
         lines.append("(簡略: 警告ラベル混入・Insider 比は未対応 → 70pt を 100pt 換算)")
+
+    elif name == "Risk":
+        btc_label = breakdown.get("btc_signal")
+        bs = breakdown.get("btc_score")
+        cex_ratio = breakdown.get("cex_inflow_ratio")
+        cs = breakdown.get("cex_score")
+        ad = breakdown.get("age_days")
+        ags = breakdown.get("age_score")
+        ni_summary = breakdown.get("ni_summary") or {}
+        nis = breakdown.get("ni_score")
+        if btc_label is not None:
+            lines.append(f"・BTC 連動 (btc-reflexivity): `{btc_label}` → {_fmt(bs)} / 30pt")
+        else:
+            lines.append(f"・BTC 連動: 取得不可 → {_fmt(bs)} / 30pt")
+        if cex_ratio is not None:
+            lines.append(f"・CEX 流入比: {cex_ratio*100:.2f}% → {_fmt(cs)} / 25pt")
+        else:
+            lines.append(f"・CEX 流入比: 取得不可 → {_fmt(cs)} / 25pt")
+        if ad is not None:
+            lines.append(f"・トークン年齢: {ad}日 → {_fmt(ags)} / 20pt")
+        else:
+            lines.append(f"・トークン年齢: 不明 → {_fmt(ags)} / 20pt")
+        ni_parts = [f"{k}={v or '?'}" for k, v in ni_summary.items()]
+        lines.append(f"・Nansen 独自リスク ({', '.join(ni_parts) or '取得不可'}) → {_fmt(nis)} / 25pt")
+
+    elif name == "Deployer Trust":
+        if not breakdown.get("fetched", True):
+            lines.append("・Solana RPC からの取得失敗 → スコア計上不可")
+        elif breakdown.get("renounced"):
+            lines.append("・Mint Authority Renounced (deployer 不明)")
+            lines.append("・通常はラグ抑止効果ありとして 70pt 付与")
+        else:
+            addr = breakdown.get("deployer_address")
+            labels = breakdown.get("labels") or []
+            ws = breakdown.get("warn_score")
+            ages = breakdown.get("age_score")
+            ds = breakdown.get("days_active")
+            ps = breakdown.get("pnl_score")
+            wr = breakdown.get("win_rate")
+            tt = breakdown.get("total_trades")
+            rs = breakdown.get("rel_score")
+            if addr:
+                lines.append(f"・deployer: `{addr[:6]}...{addr[-4:]}`")
+            if labels:
+                lines.append(f"・ラベル: {', '.join(labels[:5]) or 'なし'}")
+            lines.append(f"・警告ラベル判定 → {_fmt(ws)} / 40pt")
+            if ds is not None:
+                lines.append(f"・アカウント年齢: {ds}日 → {_fmt(ages)} / 25pt")
+            else:
+                lines.append(f"・アカウント年齢: 不明 → {_fmt(ages)} / 25pt")
+            if tt is not None:
+                wr_str = f"{wr*100:.1f}%" if isinstance(wr, (int, float)) else "?"
+                lines.append(f"・PnL: 取引{tt}回 / 勝率{wr_str} → {_fmt(ps)} / 20pt")
+            else:
+                lines.append(f"・PnL: 取得不可 → {_fmt(ps)} / 20pt")
+            lines.append(f"・関連ウォレット: フェーズB MVP → 一律 {_fmt(rs)} / 15pt")
 
     else:
         for k, v in breakdown.items():
