@@ -2,7 +2,7 @@
 
 - 類似トークン検索 (αβ判定用)
 - ブースト中トークン一覧
-レート制限は約 300 req/min なので /check 1回で問題なし。
+レート制限は約 300 req/min なので /analyze 1回で問題なし。
 """
 from __future__ import annotations
 

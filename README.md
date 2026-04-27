@@ -82,7 +82,7 @@ python -m bot.main
 Discord 上でコマンドを実行する:
 
 ```
-/check ca:<Solanaのトークンアドレス>
+/analyze ca:<Solanaのトークンアドレス>
 ```
 
 例: BONK のアドレスなどを渡す。結果は4つの Embed (銘柄詳細 / Smart Wallets / Holders / Bundle) として返信される。

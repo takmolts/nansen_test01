@@ -1,4 +1,4 @@
-"""/check コマンド: Solana ミームコインの詳細を Nansen API から取得して Embed で返す。"""
+"""/analyze コマンド: Solana ミームコインの詳細を Nansen API から取得して Embed で返す。"""
 from __future__ import annotations
 
 import asyncio
@@ -37,14 +37,14 @@ class CheckCog(commands.Cog):
         self.config = config
 
     @app_commands.command(
-        name="check",
+        name="analyze",
         description="Solana のミームコイン CA を入力すると、Nansen から詳細を取得します",
     )
     @app_commands.describe(
         ca="Solana トークンのコントラクトアドレス",
         thread="スレッドを作成して投稿するか (未指定時は環境変数 RESPONSE_MODE に従う、既定は inline)",
     )
-    async def check(
+    async def analyze(
         self,
         interaction: discord.Interaction,
         ca: str,
@@ -85,7 +85,7 @@ class CheckCog(commands.Cog):
                 token_address=ca,
             )
         except Exception:
-            logger.exception("/check 実行中に想定外のエラー")
+            logger.exception("/analyze 実行中に想定外のエラー")
             await interaction.followup.send(
                 "想定外のエラーが発生しました。ログを確認してください。",
                 ephemeral=True,
