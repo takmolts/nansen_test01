@@ -141,6 +141,9 @@ celerybeat.pid
 
 # Nansen API サンプル置き場 (APIキー等の機密を含み得るためコミットしない)
 nansen-bot-design/
+
+# 永続データ (SQLite 等)
+data/
 env/
 venv/
 ENV/

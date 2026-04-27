@@ -33,6 +33,7 @@ CREDIT_COST: dict[str, int] = {
     "flow_intelligence": 1,
     "flows": 1,
     "token_screener": 1,
+    "pnl_leaderboard": 1,
 }
 
 API_PREFIX = "/api/v1"
@@ -202,6 +203,35 @@ class NansenClient:
                 "token_address": token_address,
             },
             credit_key="nansen_indicators",
+        )
+
+    async def pnl_leaderboard(
+        self,
+        token_address: str,
+        *,
+        days: int = 30,
+        limit: int = 20,
+    ) -> Any:
+        """token に対する wallet PnL ランキング。 1 call で複数 wallet 取得可能。
+
+        フィールド: trader_address, trader_address_label, pnl_usd_realised,
+                    pnl_usd_unrealised, pnl_usd_total, nof_trades
+        """
+        now = datetime.now(timezone.utc)
+        date_from = (now - timedelta(days=days)).strftime("%Y-%m-%dT00:00:00Z")
+        date_to = now.strftime("%Y-%m-%dT23:59:59Z")
+        return await self._post(
+            "/tgm/pnl-leaderboard",
+            {
+                "chain": self._chain,
+                "token_address": token_address,
+                "date": {"from": date_from, "to": date_to},
+                "pagination": {"page": 1, "per_page": limit},
+                "order_by": [
+                    {"field": "pnl_usd_total", "direction": "DESC"},
+                ],
+            },
+            credit_key="pnl_leaderboard",
         )
 
     async def token_screener(

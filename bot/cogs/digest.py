@@ -19,6 +19,15 @@ from bot.config import Config
 from bot.digest_embeds import build_digest_message_groups
 from bot.dexscreener_client import DexScreenerClient
 from bot.nansen_client import NansenClient
+from bot.wallet_db import WalletDB
+
+# pnl-leaderboard を叩く対象 token 数の上限 (各カテゴリ上位を統合してユニーク化)
+WALLET_DB_PNL_TOP_TOKENS = 5
+# pnl-leaderboard で取得する wallet 数
+WALLET_DB_PNL_LIMIT = 20
+# 蓄積条件: pnl_usd_total >= この値 / nof_trades >= この値
+WALLET_DB_MIN_PNL = 100.0
+WALLET_DB_MIN_TRADES = 3
 
 logger = logging.getLogger(__name__)
 
@@ -113,6 +122,80 @@ class DigestCog(commands.Cog):
         # アーカイブスレッドにも追記
         await self._post_to_archive(result, timeframe=tf, tag="manual")
 
+        # wallet DB 蓄積
+        await self._accumulate_wallets(
+            api_key=self.config.nansen_api_key,
+            base_url=self.config.nansen_base_url,
+            result=result,
+            tag="manual",
+        )
+
+    @app_commands.command(
+        name="wallet-rank",
+        description="蓄積済みの高勝率ウォレットランキングを表示します",
+    )
+    @app_commands.describe(
+        order_by="ソート軸 (省略時はユニーク token 数)",
+        limit="表示件数 (1〜25、 省略時 10)",
+        min_pnl="最低累計 PnL USD (省略時 0)",
+    )
+    @app_commands.choices(
+        order_by=[
+            app_commands.Choice(name="ユニーク token 数 (持続性)", value="unique_tokens"),
+            app_commands.Choice(name="累計 PnL", value="sum_pnl_usd"),
+            app_commands.Choice(name="出現回数", value="total_appearances"),
+        ]
+    )
+    async def wallet_rank(
+        self,
+        interaction: discord.Interaction,
+        order_by: app_commands.Choice[str] | None = None,
+        limit: int = 10,
+        min_pnl: float = 0.0,
+    ):
+        if (
+            self.config.allowed_channel_ids
+            and interaction.channel_id not in self.config.allowed_channel_ids
+        ):
+            await interaction.response.send_message(
+                "このチャネルではコマンドが許可されていません。",
+                ephemeral=True,
+            )
+            return
+
+        order = order_by.value if order_by else "unique_tokens"
+        limit = max(1, min(int(limit), 25))
+
+        await interaction.response.defer(thinking=True)
+
+        try:
+            async with WalletDB() as db:
+                rows = await db.top_wallets(order_by=order, limit=limit, min_pnl=min_pnl)
+                total = await db.total_count()
+        except Exception:
+            logger.exception("/wallet-rank DB アクセス失敗")
+            await interaction.followup.send(
+                "DB アクセスでエラーが発生しました。 ログを確認してください。",
+                ephemeral=True,
+            )
+            return
+
+        if not rows:
+            await interaction.followup.send(
+                f"DB にはまだウォレットが蓄積されていません (累計 {total} 件)。",
+                ephemeral=True,
+            )
+            return
+
+        embed = _build_wallet_rank_embed(
+            rows=rows,
+            order_by=order,
+            limit=limit,
+            min_pnl=min_pnl,
+            total_records=total,
+        )
+        await interaction.followup.send(embed=embed)
+
     # ---- 自動 4 時間ごと (JST 01 / 05 / 09 / 13 / 17 / 21) ----
     @tasks.loop(time=JST_4H_TIMES)
     async def auto_4h_digest(self) -> None:
@@ -156,9 +239,93 @@ class DigestCog(commands.Cog):
                 if embeds_in_msg:
                     await channel.send(embeds=embeds_in_msg)
             await self._post_to_archive(result, timeframe=timeframe, tag=tag)
+            await self._accumulate_wallets(
+                api_key=self.config.nansen_api_key,
+                base_url=self.config.nansen_base_url,
+                result=result,
+                tag=tag,
+            )
             logger.info("[%s] digest 投稿成功 (timeframe=%s)", tag, timeframe)
         except Exception:
             logger.exception("[%s] digest 自動投稿失敗", tag)
+
+    async def _accumulate_wallets(
+        self,
+        *,
+        api_key: str,
+        base_url: str,
+        result: "_DigestResult",
+        tag: str,
+    ) -> None:
+        """digest 上位 token の pnl-leaderboard を取得して wallet DB に蓄積する。"""
+        target_addresses = _pick_target_tokens(result, top=WALLET_DB_PNL_TOP_TOKENS)
+        if not target_addresses:
+            return
+
+        async with NansenClient(api_key, base_url, chain="solana") as client:
+            try:
+                pnl_results = await asyncio.gather(
+                    *(
+                        client.pnl_leaderboard(addr, limit=WALLET_DB_PNL_LIMIT)
+                        for addr in target_addresses
+                    ),
+                    return_exceptions=True,
+                )
+            except Exception:
+                logger.exception("[%s] pnl-leaderboard 取得失敗", tag)
+                return
+            credits_used = client.credits_used
+
+        # token_address → token_symbol の lookup を screener 結果から作る
+        symbol_lookup = _build_symbol_lookup(result)
+
+        rows: list[dict] = []
+        for addr, resp in zip(target_addresses, pnl_results):
+            if isinstance(resp, BaseException) or not isinstance(resp, dict):
+                logger.warning("[%s] pnl-leaderboard %s 取得失敗", tag, addr)
+                continue
+            data = resp.get("data")
+            if not isinstance(data, list):
+                continue
+            sym = symbol_lookup.get(addr.lower())
+            for item in data:
+                if not isinstance(item, dict):
+                    continue
+                trader = item.get("trader_address")
+                if not isinstance(trader, str) or not trader:
+                    continue
+                pnl_total = _to_float(item.get("pnl_usd_total"))
+                nof_trades = item.get("nof_trades")
+                # 蓄積条件
+                if pnl_total is None or pnl_total < WALLET_DB_MIN_PNL:
+                    continue
+                if not isinstance(nof_trades, (int, float)) or nof_trades < WALLET_DB_MIN_TRADES:
+                    continue
+                rows.append({
+                    "wallet_address": trader,
+                    "token_address": addr,
+                    "token_symbol": sym,
+                    "pnl_usd_realised": _to_float(item.get("pnl_usd_realised")),
+                    "pnl_usd_unrealised": _to_float(item.get("pnl_usd_unrealised")),
+                    "pnl_usd_total": pnl_total,
+                    "nof_trades": int(nof_trades),
+                    "label": item.get("trader_address_label"),
+                })
+
+        if not rows:
+            logger.info("[%s] wallet DB: 蓄積条件を満たすレコードなし", tag)
+            return
+
+        try:
+            async with WalletDB() as db:
+                inserted = await db.insert_appearances(rows)
+                total = await db.total_count()
+            logger.info(
+                "[%s] wallet DB: %d 件 insert 完了 / total=%d / pnl-leaderboard credit=%d",
+                tag, inserted, total, credits_used,
+            )
+        except Exception:
+            logger.exception("[%s] wallet DB 書き込み失敗", tag)
 
     async def _post_to_archive(
         self,
@@ -301,6 +468,116 @@ def _extract_top(resp, n: int) -> list[dict]:
     if not isinstance(data, list):
         return []
     return [t for t in data[:n] if isinstance(t, dict)]
+
+
+def _pick_target_tokens(result: "_DigestResult", *, top: int) -> list[str]:
+    """各カテゴリ上位を統合してユニーク化した token_address を最大 top 件返す。"""
+    seen: set[str] = set()
+    out: list[str] = []
+    for items in (result.momentum_data, result.sm_data, result.hot_data):
+        for t in items:
+            addr = t.get("token_address")
+            if not isinstance(addr, str) or not addr:
+                continue
+            key = addr.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(addr)
+            if len(out) >= top:
+                return out
+    return out
+
+
+def _build_symbol_lookup(result: "_DigestResult") -> dict[str, str]:
+    out: dict[str, str] = {}
+    for items in (result.momentum_data, result.sm_data, result.hot_data):
+        for t in items:
+            addr = t.get("token_address")
+            sym = t.get("token_symbol")
+            if isinstance(addr, str) and isinstance(sym, str):
+                out.setdefault(addr.lower(), sym)
+    return out
+
+
+def _to_float(v):
+    if v is None:
+        return None
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+_ORDER_LABEL = {
+    "unique_tokens": "ユニーク token 数",
+    "sum_pnl_usd": "累計 PnL",
+    "total_appearances": "出現回数",
+}
+
+
+def _build_wallet_rank_embed(
+    *,
+    rows,
+    order_by: str,
+    limit: int,
+    min_pnl: float,
+    total_records: int,
+) -> discord.Embed:
+    title = f"🏆 高勝率ウォレット (sort: {_ORDER_LABEL.get(order_by, order_by)})"
+    desc_lines = [
+        f"上位 {len(rows)} 件 / DB 蓄積 累計 {total_records} 件",
+    ]
+    if min_pnl > 0:
+        desc_lines.append(f"min_pnl: ${min_pnl:.0f}")
+    embed = discord.Embed(
+        title=title,
+        description="\n".join(desc_lines),
+        color=0xFFD700,
+    )
+
+    for i, r in enumerate(rows, start=1):
+        addr = r["wallet_address"]
+        label = r["label"] or ""
+        unique_tokens = r["unique_tokens"]
+        appearances = r["total_appearances"]
+        sum_pnl = r["sum_pnl_usd"]
+        last_seen = r["last_seen"]
+
+        short = f"{addr[:4]}...{addr[-4:]}" if len(addr) > 8 else addr
+        head = f"#{i} {label}".strip() if label else f"#{i} {short}"
+        nansen_url = f"https://app.nansen.ai/profiler/{addr}?chain=solana"
+        solscan_url = f"https://solscan.io/account/{addr}"
+
+        value_lines = [
+            f"📍 [{short}]({solscan_url}) · [Nansen]({nansen_url})",
+            f"🪙 unique tokens: **{unique_tokens}** | 📊 出現: **{appearances}** 回",
+            f"💵 累計 PnL: **{_fmt_pnl(sum_pnl)}**",
+            f"🕒 last seen: {last_seen[:16] if isinstance(last_seen, str) else last_seen}",
+        ]
+        embed.add_field(
+            name=head,
+            value="\n".join(value_lines),
+            inline=False,
+        )
+
+    return embed
+
+
+def _fmt_pnl(v) -> str:
+    if v is None:
+        return "N/A"
+    try:
+        n = float(v)
+    except (TypeError, ValueError):
+        return "N/A"
+    a = abs(n)
+    sign = "-" if n < 0 else ""
+    if a >= 1_000_000:
+        return f"{sign}${a/1_000_000:.2f}M"
+    if a >= 1_000:
+        return f"{sign}${a/1_000:.2f}K"
+    return f"{sign}${a:.2f}"
 
 
 def _collect_addresses(*responses) -> list[str]:
