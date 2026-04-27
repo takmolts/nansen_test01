@@ -6,12 +6,15 @@ from typing import Any
 
 import discord
 
-from bot.links import trade_links_md
+from bot.links import trade_links_md, x_search_links_md
 
 COLOR_MOMENTUM = 0xFF8C00      # オレンジ (勢い)
 COLOR_SM = 0x4B9CD3            # 青 (SM)
 COLOR_HOT = 0x9370DB           # 紫 (急流入、 両刃シグナル)
 COLOR_ERROR = 0x808080
+
+# 各 Embed あたりの表示件数 (1 メッセージ 1 Embed で送るので 1 embed 6000 制限のみ)
+ROWS_PER_EMBED = 5
 
 
 def build_digest_embeds(
@@ -25,7 +28,7 @@ def build_digest_embeds(
     embeds = [
         _build_embed(
             title=f"🔥 出来高急増ミーム ({timeframe}, age ≤ 30d)",
-            description=f"出来高 (`volume`) 上位 5 件。 直近 {timeframe} で資金が集まっているトークン。",
+            description=f"出来高 (`volume`) 上位 {ROWS_PER_EMBED} 件。 直近 {timeframe} で資金が集まっているトークン。",
             color=COLOR_MOMENTUM,
             data=_extract_data(momentum_resp),
             row_formatter=_format_row_momentum,
@@ -33,7 +36,7 @@ def build_digest_embeds(
         ),
         _build_embed(
             title=f"🧠 Smart Money 買い集めランキング ({timeframe})",
-            description=f"SM の買い額 (`buy_volume`) 上位 5 件。 直近 {timeframe} でプロが買っているトークン。",
+            description=f"SM の買い額 (`buy_volume`) 上位 {ROWS_PER_EMBED} 件。 直近 {timeframe} でプロが買っているトークン。",
             color=COLOR_SM,
             data=_extract_data(sm_resp),
             row_formatter=_format_row_sm,
@@ -85,7 +88,7 @@ def _build_embed(
         return embed
 
     lines = [description, ""]
-    for i, t in enumerate(data[:5], start=1):
+    for i, t in enumerate(data[:ROWS_PER_EMBED], start=1):
         lines.append(row_formatter(i, t))
         lines.append("")  # 行間スペース
 
@@ -108,8 +111,7 @@ def _format_row_momentum(rank: int, t: dict[str, Any]) -> str:
     mcap = _fmt_usd(t.get("market_cap_usd"))
     age = _fmt_days(t.get("token_age_days"))
     line1 = f"**{rank}. ${sym}** — vol {vol} ({pc_str}) | mcap {mcap} | {age}"
-    line2 = _link_line(addr)
-    return f"{line1}\n{line2}"
+    return f"{line1}\n{_link_line(addr, sym)}"
 
 
 def _format_row_sm(rank: int, t: dict[str, Any]) -> str:
@@ -123,7 +125,7 @@ def _format_row_sm(rank: int, t: dict[str, Any]) -> str:
         parts.append(f"{nb} traders")
     parts.append(f"mcap {mcap}")
     line1 = f"**{rank}. ${sym}** — " + " | ".join(parts)
-    return f"{line1}\n{_link_line(addr)}"
+    return f"{line1}\n{_link_line(addr, sym)}"
 
 
 def _format_row_danger(rank: int, t: dict[str, Any]) -> str:
@@ -139,7 +141,7 @@ def _format_row_danger(rank: int, t: dict[str, Any]) -> str:
         parts.append(f"{nb} traders")
     parts.append(f"fdv {fdv}")
     line1 = f"**{rank}. ${sym}** — " + " | ".join(parts)
-    return f"{line1}\n{_link_line(addr)}"
+    return f"{line1}\n{_link_line(addr, sym)}"
 
 
 def _trader_count(t: dict[str, Any]) -> int | None:
@@ -153,12 +155,18 @@ def _trader_count(t: dict[str, Any]) -> int | None:
 
 # ----- 共通ヘルパ -----
 
-def _link_line(addr: str) -> str:
+def _link_line(addr: str, symbol: str | None = None) -> str:
+    """CA / X Search / Trade を 3 行に分けて返す。"""
     if not addr:
         return "  (no address)"
-    short = f"{addr[:4]}...{addr[-4:]}" if len(addr) > 8 else addr
-    md = trade_links_md(addr, chain="solana")
-    return f"  `{short}` · {md}"
+    sym = symbol if symbol and symbol != "?" else None
+    trade = trade_links_md(addr, chain="solana")
+    x = x_search_links_md(sym, addr)
+    lines = [f"💬 CA: `{addr}`"]
+    if x:
+        lines.append(f"🐦 X Search: {x}")
+    lines.append(f"🔗 Trade: {trade}")
+    return "\n".join(lines)
 
 
 def _extract_data(resp: Any) -> list[dict[str, Any]]:

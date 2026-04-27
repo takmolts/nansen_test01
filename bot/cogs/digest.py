@@ -103,7 +103,10 @@ class DigestCog(commands.Cog):
             )
             return
 
-        await interaction.followup.send(embeds=embed_list)
+        # 3 Embed を 1 メッセージにまとめると合計 6000 文字制限を超えるため、
+        # 1 Embed ずつ followup で送る (どれもコマンド実行者の応答として表示される)
+        for embed in embed_list:
+            await interaction.followup.send(embed=embed)
 
     # ---- 自動 4 時間ごと (JST 01 / 05 / 09 / 13 / 17 / 21) ----
     @tasks.loop(time=JST_4H_TIMES)
@@ -144,7 +147,8 @@ class DigestCog(commands.Cog):
                 base_url=self.config.nansen_base_url,
                 timeframe=timeframe,
             )
-            await channel.send(embeds=embed_list)
+            for embed in embed_list:
+                await channel.send(embed=embed)
             logger.info("[%s] digest 投稿成功 (timeframe=%s)", tag, timeframe)
         except Exception:
             logger.exception("[%s] digest 自動投稿失敗", tag)
@@ -183,7 +187,7 @@ async def _build_digest(
         )
         credits_used = client.credits_used
 
-    danger_sorted = _resort_by_inflow(danger_r, top_n=5)
+    danger_sorted = _resort_by_inflow(danger_r, top_n=10)  # 多めに渡しても embed 側で 4 件に絞る
 
     return build_digest_embeds(
         momentum_resp=momentum_r,

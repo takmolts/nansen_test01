@@ -1,6 +1,8 @@
 """トークン CA から取引/閲覧用 URL を生成する共通ヘルパ。"""
 from __future__ import annotations
 
+import urllib.parse
+
 # UniversalX の chainId 対応 (CAIP 風数値)
 _UNIVERSALX_CHAIN_ID = {
     "solana": "101",
@@ -46,6 +48,22 @@ def trade_links(token_address: str, *, chain: str = "solana") -> list[tuple[str,
 def trade_links_md(token_address: str, *, chain: str = "solana") -> str:
     """マークダウンの "[label](url) · [label](url) ..." を返す。"""
     return " · ".join(f"[{label}]({url})" for label, url in trade_links(token_address, chain=chain))
+
+
+def x_search_url(query: str) -> str:
+    """X (Twitter) の検索結果ページ URL。"""
+    encoded = urllib.parse.quote(query)
+    return f"https://x.com/search?q={encoded}&src=typed_query&f=live"
+
+
+def x_search_links_md(symbol: str | None, address: str | None) -> str:
+    """`[CA](...) · [$SYMBOL](...)` の md。 取れた要素のみ。"""
+    parts: list[str] = []
+    if address:
+        parts.append(f"[CA]({x_search_url(address)})")
+    if symbol:
+        parts.append(f"[${symbol}]({x_search_url(f'${symbol}')})")
+    return " · ".join(parts)
 
 
 def solscan_token_url(token_address: str) -> str:

@@ -16,6 +16,7 @@ from bot.links import (
     solscan_account_url,
     solscan_token_url,
     trade_links_md,
+    x_search_links_md,
 )
 
 if TYPE_CHECKING:
@@ -214,6 +215,14 @@ def build_token_info_embed(
         value=trade_links_md(token_address, chain="solana"),
         inline=False,
     )
+
+    x_md = x_search_links_md(symbol if isinstance(symbol, str) and symbol != "?" else None, token_address)
+    if x_md:
+        embed.add_field(
+            name="🐦 X Search",
+            value=x_md,
+            inline=False,
+        )
 
     socials: list[str] = []
     if isinstance(website, str) and website.startswith("http"):
