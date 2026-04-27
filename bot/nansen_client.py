@@ -129,7 +129,7 @@ class NansenClient:
                 "pagination": {"page": 1, "per_page": per_page},
                 "premium_labels": False,
                 "order_by": [
-                    {"field": "address", "direction": "ASC"},
+                    {"field": "ownership_percentage", "direction": "DESC"},
                 ],
             },
             credit_key="holders",

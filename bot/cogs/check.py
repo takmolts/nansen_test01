@@ -3,14 +3,16 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from typing import Any
 
 import discord
 from discord import app_commands
 from discord.ext import commands
 
 from bot import embeds
-from bot.config import Config
+from bot.config import RESPONSE_MODE_INLINE, RESPONSE_MODE_THREAD, Config
 from bot.nansen_client import NansenAPIError, NansenClient
+from bot.views import DeleteResultView
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +20,9 @@ logger = logging.getLogger(__name__)
 # (クレジット消費が whale 数ぶん増えるので上限をかける)
 MAX_WHALE_LOOKUPS = 10
 WHALE_THRESHOLD_PCT = 3.0
+
+# Discord のスレッド名は最大 100 文字
+THREAD_NAME_MAX = 100
 
 
 class CheckCog(commands.Cog):
@@ -29,8 +34,16 @@ class CheckCog(commands.Cog):
         name="check",
         description="Solana のミームコイン CA を入力すると、Nansen から詳細を取得します",
     )
-    @app_commands.describe(ca="Solana トークンのコントラクトアドレス")
-    async def check(self, interaction: discord.Interaction, ca: str):
+    @app_commands.describe(
+        ca="Solana トークンのコントラクトアドレス",
+        thread="スレッドを作成して投稿するか (未指定時は環境変数 RESPONSE_MODE に従う、既定は inline)",
+    )
+    async def check(
+        self,
+        interaction: discord.Interaction,
+        ca: str,
+        thread: bool | None = None,
+    ):
         if (
             self.config.allowed_channel_ids
             and interaction.channel_id not in self.config.allowed_channel_ids
@@ -63,13 +76,33 @@ class CheckCog(commands.Cog):
             return
 
         embeds.set_credit_footer(result.embed_list, result.credits_used)
-        await interaction.followup.send(embeds=result.embed_list)
+
+        # コマンド引数 thread が指定されていればそれを優先、無ければ env の値
+        if thread is True:
+            response_mode = RESPONSE_MODE_THREAD
+        elif thread is False:
+            response_mode = RESPONSE_MODE_INLINE
+        else:
+            response_mode = self.config.response_mode
+
+        await _post_result(
+            interaction=interaction,
+            result=result,
+            token_address=ca,
+            response_mode=response_mode,
+        )
 
 
 class _AnalysisResult:
-    def __init__(self, embed_list: list[discord.Embed], credits_used: int):
+    def __init__(
+        self,
+        embed_list: list[discord.Embed],
+        credits_used: int,
+        symbol: str,
+    ):
         self.embed_list = embed_list
         self.credits_used = credits_used
+        self.symbol = symbol
 
 
 async def _run_analysis(*, api_key: str, base_url: str, token_address: str) -> _AnalysisResult:
@@ -109,7 +142,6 @@ async def _run_analysis(*, api_key: str, base_url: str, token_address: str) -> _
                 bundle_error = str(e)
                 related_results = []
 
-            # funder_address -> [holder_dict, ...]
             funder_map: dict[str, list[dict]] = {}
             for whale, related in zip(whales_lookup, related_results):
                 if isinstance(related, BaseException):
@@ -127,8 +159,10 @@ async def _run_analysis(*, api_key: str, base_url: str, token_address: str) -> _
 
         credits_used = client.credits_used
 
-    embed_list: list[discord.Embed] = []
+    symbol = _extract_symbol(token_info_r)
+    total_holders = _extract_total_holders(token_info_r)
 
+    embed_list: list[discord.Embed] = []
     embed_list.append(
         embeds.build_token_info_embed(
             None if isinstance(token_info_r, BaseException) else token_info_r,
@@ -146,6 +180,7 @@ async def _run_analysis(*, api_key: str, base_url: str, token_address: str) -> _
         embeds.build_holders_embed(
             None if isinstance(holders_r, BaseException) else holders_r,
             error=_err_msg(holders_r),
+            total_holders_override=total_holders,
         )
     )
     embed_list.append(
@@ -156,7 +191,35 @@ async def _run_analysis(*, api_key: str, base_url: str, token_address: str) -> _
         )
     )
 
-    return _AnalysisResult(embed_list, credits_used)
+    return _AnalysisResult(embed_list, credits_used, symbol)
+
+
+def _extract_symbol(token_info: Any) -> str:
+    """token-information レスポンスから symbol を抜き出す(スレッド名用)。"""
+    if isinstance(token_info, BaseException) or not isinstance(token_info, dict):
+        return ""
+    data = token_info.get("data")
+    if not isinstance(data, dict):
+        data = token_info
+    sym = data.get("symbol") or data.get("token_symbol") or ""
+    return str(sym).strip()
+
+
+def _extract_total_holders(token_info: Any) -> int | None:
+    """token-information レスポンスから総ホルダー数を抜き出す。"""
+    if isinstance(token_info, BaseException) or not isinstance(token_info, dict):
+        return None
+    data = token_info.get("data")
+    if not isinstance(data, dict):
+        data = token_info
+    spot = data.get("spot_metrics") if isinstance(data.get("spot_metrics"), dict) else {}
+    raw = spot.get("total_holders") if spot else None
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
 
 
 def _err_msg(result: object) -> str | None:
@@ -165,6 +228,95 @@ def _err_msg(result: object) -> str | None:
     if isinstance(result, NansenAPIError):
         return f"HTTP {result.status}"
     return type(result).__name__
+
+
+async def _post_result(
+    *,
+    interaction: discord.Interaction,
+    result: _AnalysisResult,
+    token_address: str,
+    response_mode: str,
+) -> None:
+    owner_id = interaction.user.id
+
+    if response_mode != RESPONSE_MODE_THREAD:
+        view = DeleteResultView(owner_id=owner_id)
+        await interaction.followup.send(embeds=result.embed_list, view=view)
+        return
+
+    channel = interaction.channel
+    if not isinstance(channel, discord.TextChannel):
+        logger.warning(
+            "スレッド作成不可なチャンネル種別 (%s) → inline 投稿に fallback",
+            type(channel).__name__,
+        )
+        view = DeleteResultView(owner_id=owner_id)
+        await interaction.followup.send(embeds=result.embed_list, view=view)
+        return
+
+    base_name = f"${result.symbol}" if result.symbol else f"Check {token_address[:8]}"
+    thread_name = base_name[:THREAD_NAME_MAX]
+
+    # 同名スレッドがあれば追記モード
+    existing = await _find_existing_thread(channel, thread_name)
+    if existing is not None:
+        try:
+            if existing.archived:
+                await existing.edit(archived=False)
+            view = DeleteResultView(owner_id=owner_id, target_thread=existing)
+            await existing.send(embeds=result.embed_list, view=view)
+            await interaction.followup.send(
+                content=f"📊 既存スレッド {existing.mention} に追記しました",
+                ephemeral=True,
+            )
+            return
+        except Exception:
+            logger.exception("既存スレッドへの追記失敗 → 新規作成に fallback")
+
+    # 新規スレッド作成
+    try:
+        anchor_webhook = await interaction.followup.send(
+            content=f"📊 {base_name} の分析結果はスレッド内に投稿しました",
+            wait=True,
+        )
+        # WebhookMessage には guild 情報が付かないため Message に取り直す
+        anchor = await channel.fetch_message(anchor_webhook.id)
+        thread = await anchor.create_thread(name=thread_name)
+        view = DeleteResultView(
+            owner_id=owner_id,
+            target_thread=thread,
+            target_anchor=anchor,
+        )
+        await thread.send(embeds=result.embed_list, view=view)
+    except discord.Forbidden:
+        logger.exception("スレッド作成権限不足")
+        await interaction.followup.send(
+            "スレッド作成権限がありません。Bot の権限を確認してください。",
+            ephemeral=True,
+        )
+    except Exception:
+        logger.exception("スレッド投稿失敗 → inline に fallback")
+        view = DeleteResultView(owner_id=owner_id)
+        await interaction.followup.send(embeds=result.embed_list, view=view)
+
+
+async def _find_existing_thread(
+    channel: discord.TextChannel,
+    name: str,
+) -> discord.Thread | None:
+    """同名スレッドを検索する(アクティブ → アーカイブ済みの順)。"""
+    for t in channel.threads:
+        if t.name == name:
+            return t
+    try:
+        async for t in channel.archived_threads(limit=50):
+            if t.name == name:
+                return t
+    except discord.Forbidden:
+        logger.warning("アーカイブスレッド一覧の取得権限なし")
+    except Exception:
+        logger.exception("アーカイブスレッド検索で例外")
+    return None
 
 
 async def setup(bot: commands.Bot) -> None:

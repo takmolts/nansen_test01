@@ -343,6 +343,7 @@ def build_holders_embed(
     *,
     top_n: int = 10,
     error: str | None = None,
+    total_holders_override: int | None = None,
 ) -> discord.Embed:
     embed = discord.Embed(
         title="👥 Holders 分布",
@@ -366,11 +367,9 @@ def build_holders_embed(
     top = sorted_holders[:top_n]
 
     top_sum = sum((holder_pct(h) or 0.0) for h in top)
-    total_holders = (
-        _first(holders_data, "total_holders", "totalHolders", "total")
-        if isinstance(holders_data, dict)
-        else None
-    )
+    total_holders: Any = total_holders_override
+    if total_holders is None and isinstance(holders_data, dict):
+        total_holders = _first(holders_data, "total_holders", "totalHolders", "total")
 
     concentration_color = (
         COLOR_DANGER if top_sum >= 50

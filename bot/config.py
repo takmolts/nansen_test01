@@ -7,6 +7,11 @@ from dataclasses import dataclass
 from dotenv import load_dotenv
 
 
+RESPONSE_MODE_INLINE = "inline"
+RESPONSE_MODE_THREAD = "thread"
+_VALID_RESPONSE_MODES = {RESPONSE_MODE_INLINE, RESPONSE_MODE_THREAD}
+
+
 @dataclass(frozen=True)
 class Config:
     discord_bot_token: str
@@ -14,6 +19,7 @@ class Config:
     nansen_base_url: str
     allowed_channel_ids: frozenset[int]
     dev_guild_id: int | None
+    response_mode: str
     log_level: str
 
     @classmethod
@@ -34,6 +40,12 @@ class Config:
         raw_guild = os.getenv("DEV_GUILD_ID", "").strip()
         dev_guild_id = int(raw_guild) if raw_guild else None
 
+        raw_mode = os.getenv("RESPONSE_MODE", RESPONSE_MODE_INLINE).strip().lower()
+        if raw_mode not in _VALID_RESPONSE_MODES:
+            raise RuntimeError(
+                f"RESPONSE_MODE は {sorted(_VALID_RESPONSE_MODES)} のいずれかにしてください (現在値: {raw_mode!r})"
+            )
+
         log_level = os.getenv("LOG_LEVEL", "INFO").upper()
 
         return cls(
@@ -42,6 +54,7 @@ class Config:
             nansen_base_url=base_url,
             allowed_channel_ids=channels,
             dev_guild_id=dev_guild_id,
+            response_mode=raw_mode,
             log_level=log_level,
         )
 

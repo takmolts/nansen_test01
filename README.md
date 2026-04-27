@@ -55,6 +55,7 @@ pip install -r requirements.txt
 | `NANSEN_BASE_URL` | - | 既定 `https://api.nansen.ai` |
 | `ALLOWED_CHANNEL_IDS` | - | bot が反応するチャネル ID (カンマ区切り)。空にすると全チャネル許可 |
 | `DEV_GUILD_ID` | - | 開発用ギルド ID。設定するとこのギルドにだけ Slash コマンドを即時同期する。空にすると全ギルドへグローバル同期 (反映まで最大1時間) |
+| `RESPONSE_MODE` | - | `inline` (既定) または `thread`。`thread` だとコマンドチャンネルにスレッドを生やしてその中に Embed を投稿する |
 | `LOG_LEVEL` | - | `INFO` / `DEBUG` など。API payload を見たい場合は `DEBUG` |
 
 ## 実行
