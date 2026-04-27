@@ -7,15 +7,17 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import time, timezone, timedelta
+from datetime import datetime, time, timezone, timedelta
 from zoneinfo import ZoneInfo
 
 import discord
 from discord import app_commands
 from discord.ext import commands, tasks
 
+from bot import archive_embeds
 from bot.config import Config
-from bot.digest_embeds import build_digest_embeds
+from bot.digest_embeds import build_digest_message_groups
+from bot.dexscreener_client import DexScreenerClient
 from bot.nansen_client import NansenClient
 
 logger = logging.getLogger(__name__)
@@ -90,7 +92,7 @@ class DigestCog(commands.Cog):
         await interaction.response.defer(thinking=True)
 
         try:
-            embed_list = await _build_digest(
+            result = await _build_digest(
                 api_key=self.config.nansen_api_key,
                 base_url=self.config.nansen_base_url,
                 timeframe=tf,
@@ -103,10 +105,13 @@ class DigestCog(commands.Cog):
             )
             return
 
-        # 3 Embed を 1 メッセージにまとめると合計 6000 文字制限を超えるため、
-        # 1 Embed ずつ followup で送る (どれもコマンド実行者の応答として表示される)
-        for embed in embed_list:
-            await interaction.followup.send(embed=embed)
+        # 通常結果を返信
+        for embeds_in_msg in result.groups:
+            if embeds_in_msg:
+                await interaction.followup.send(embeds=embeds_in_msg)
+
+        # アーカイブスレッドにも追記
+        await self._post_to_archive(result, timeframe=tf, tag="manual")
 
     # ---- 自動 4 時間ごと (JST 01 / 05 / 09 / 13 / 17 / 21) ----
     @tasks.loop(time=JST_4H_TIMES)
@@ -142,16 +147,93 @@ class DigestCog(commands.Cog):
             return
 
         try:
-            embed_list = await _build_digest(
+            result = await _build_digest(
                 api_key=self.config.nansen_api_key,
                 base_url=self.config.nansen_base_url,
                 timeframe=timeframe,
             )
-            for embed in embed_list:
-                await channel.send(embed=embed)
+            for embeds_in_msg in result.groups:
+                if embeds_in_msg:
+                    await channel.send(embeds=embeds_in_msg)
+            await self._post_to_archive(result, timeframe=timeframe, tag=tag)
             logger.info("[%s] digest 投稿成功 (timeframe=%s)", tag, timeframe)
         except Exception:
             logger.exception("[%s] digest 自動投稿失敗", tag)
+
+    async def _post_to_archive(
+        self,
+        result: "_DigestResult",
+        *,
+        timeframe: str,
+        tag: str,
+    ) -> None:
+        thread_id = self.config.digest_archive_thread_id
+        if not thread_id:
+            return
+        thread = self.bot.get_channel(thread_id)
+        if thread is None:
+            try:
+                thread = await self.bot.fetch_channel(thread_id)
+            except Exception:
+                logger.exception("[%s] DIGEST_ARCHIVE_THREAD_ID=%s の取得失敗", tag, thread_id)
+                return
+        if not isinstance(thread, discord.Thread):
+            logger.warning(
+                "[%s] DIGEST_ARCHIVE_THREAD_ID=%s は Thread ではない (%s)",
+                tag, thread_id, type(thread).__name__,
+            )
+            return
+
+        # 区切りヘッダー (集計時刻 + timeframe)
+        now_jst = datetime.now(JST)
+        header = (
+            f"━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"📅 **[{now_jst.strftime('%Y-%m-%d %H:%M')} JST] 集計データ** "
+            f"(timeframe=`{timeframe}`)"
+        )
+        try:
+            await thread.send(header)
+        except Exception:
+            logger.exception("[%s] archive ヘッダー投稿失敗", tag)
+
+        for category, items in (
+            ("momentum", result.momentum_data),
+            ("sm", result.sm_data),
+            ("hot", result.hot_data),
+        ):
+            for rank, t in enumerate(items, start=1):
+                addr = t.get("token_address") or ""
+                dex = result.dex_lookup.get(addr.lower()) if addr else None
+                try:
+                    embed = archive_embeds.build_archive_embed(
+                        category=category,
+                        rank=rank,
+                        timeframe=timeframe,
+                        screener_data=t,
+                        dex_data=dex,
+                    )
+                    await thread.send(embed=embed)
+                except Exception:
+                    logger.exception(
+                        "[%s] archive embed 投稿失敗 cat=%s addr=%s",
+                        tag, category, addr,
+                    )
+
+
+class _DigestResult:
+    def __init__(
+        self,
+        groups: list[list[discord.Embed]],
+        momentum_data: list[dict],
+        sm_data: list[dict],
+        hot_data: list[dict],
+        dex_lookup: dict[str, dict | None],
+    ):
+        self.groups = groups
+        self.momentum_data = momentum_data
+        self.sm_data = sm_data
+        self.hot_data = hot_data
+        self.dex_lookup = dex_lookup
 
 
 async def _build_digest(
@@ -159,7 +241,7 @@ async def _build_digest(
     api_key: str,
     base_url: str,
     timeframe: str,
-) -> list[discord.Embed]:
+) -> _DigestResult:
     async with NansenClient(api_key, base_url, chain="solana") as client:
         momentum_r, sm_r, danger_r = await asyncio.gather(
             client.token_screener(
@@ -187,15 +269,82 @@ async def _build_digest(
         )
         credits_used = client.credits_used
 
-    danger_sorted = _resort_by_inflow(danger_r, top_n=10)  # 多めに渡しても embed 側で 4 件に絞る
+    danger_sorted = _resort_by_inflow(danger_r, top_n=10)
 
-    return build_digest_embeds(
+    addresses = _collect_addresses(momentum_r, sm_r, danger_sorted)
+    dex_lookup = await _fetch_dex_lookup(addresses)
+    image_urls = {k: (v.get("info", {}).get("imageUrl") if isinstance(v, dict) else None)
+                  for k, v in dex_lookup.items()}
+
+    groups = build_digest_message_groups(
         momentum_resp=momentum_r,
         sm_resp=sm_r,
         danger_resp=danger_sorted,
+        image_urls=image_urls,
         credits_used=credits_used,
         timeframe=timeframe,
     )
+
+    return _DigestResult(
+        groups=groups,
+        momentum_data=_extract_top(momentum_r, 5),
+        sm_data=_extract_top(sm_r, 5),
+        hot_data=_extract_top(danger_sorted, 5),
+        dex_lookup=dex_lookup,
+    )
+
+
+def _extract_top(resp, n: int) -> list[dict]:
+    if isinstance(resp, BaseException) or not isinstance(resp, dict):
+        return []
+    data = resp.get("data")
+    if not isinstance(data, list):
+        return []
+    return [t for t in data[:n] if isinstance(t, dict)]
+
+
+def _collect_addresses(*responses) -> list[str]:
+    """全レスポンスから上位 5 件分の token_address をユニークに集める。"""
+    seen: set[str] = set()
+    out: list[str] = []
+    for resp in responses:
+        if isinstance(resp, BaseException) or not isinstance(resp, dict):
+            continue
+        data = resp.get("data")
+        if not isinstance(data, list):
+            continue
+        for t in data[:5]:
+            if not isinstance(t, dict):
+                continue
+            addr = t.get("token_address")
+            if isinstance(addr, str) and addr:
+                key = addr.lower()
+                if key not in seen:
+                    seen.add(key)
+                    out.append(addr)
+    return out
+
+
+async def _fetch_dex_lookup(addresses: list[str]) -> dict[str, dict | None]:
+    """DexScreener から各 token の pair データを並列取得し lowercase アドレス → dict の lookup を返す。"""
+    if not addresses:
+        return {}
+    results: dict[str, dict | None] = {a.lower(): None for a in addresses}
+    try:
+        async with DexScreenerClient() as ds:
+            async def _one(a: str) -> tuple[str, dict | None]:
+                try:
+                    return a.lower(), await ds.get_token_data(a)
+                except Exception:
+                    logger.warning("DexScreener token data 取得失敗 addr=%s", a, exc_info=True)
+                    return a.lower(), None
+
+            pairs = await asyncio.gather(*(_one(a) for a in addresses))
+            for k, v in pairs:
+                results[k] = v
+    except Exception:
+        logger.exception("DexScreener セッション初期化失敗")
+    return results
 
 
 def _resort_by_inflow(resp, top_n: int):

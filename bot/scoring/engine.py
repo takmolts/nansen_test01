@@ -1,9 +1,10 @@
 """スコア計算のエントリポイント。
 
-cog から API レスポンスとバンドル検出の中間結果を受け取り、各カテゴリスコアと
-総合スコアを TotalScore として返す。
+Deployer Trust は Nansen profiler / Helius 双方ともデータが薄く、
+スコアとして機能しないため評価項目から除外している。
 
-フェーズB3 (完成形): 8カテゴリ、合計重み 100% (再正規化不要)
+現フェーズ: 7 カテゴリのうち Deployer Trust を抜いた 6 カテゴリ
+SM 20 + Mom 12 + Liq 12 + Dist 8 + Bundle 13 + Risk 12 + Narr 15 = 92
 """
 from __future__ import annotations
 
@@ -11,7 +12,6 @@ from typing import Any
 
 from bot.scoring import (
     bundle,
-    deployer,
     distribution,
     liquidity,
     momentum,
@@ -21,9 +21,7 @@ from bot.scoring import (
 )
 from bot.scoring.types import TotalScore
 
-# 設計書通りの 8 カテゴリ重み合計 (= 100)
-# SM 20 + Mom 12 + Liq 12 + Dist 8 + Bundle 13 + Deployer 8 + Risk 12 + Narr 15 = 100
-WEIGHT_TOTAL_PCT = 100
+WEIGHT_TOTAL_PCT = 92
 
 
 def calculate_scores(
@@ -37,12 +35,6 @@ def calculate_scores(
     flows_resp: Any,
     whales: list[dict[str, Any]],
     clusters: list[tuple[str, list[dict[str, Any]]]],
-    deployer_address: str | None,
-    deployer_fetched: bool,
-    deployer_labels: Any,
-    deployer_transactions: Any,
-    deployer_pnl: Any,
-    creator_deploy_count: int | None,
     nansen_indicators: Any,
     flow_intelligence: Any,
     similar_pairs: list[dict[str, Any]] | None,
@@ -67,15 +59,6 @@ def calculate_scores(
         bundle.calculate(
             whales=whales,
             clusters=clusters,
-            weight_total_pct=WEIGHT_TOTAL_PCT,
-        ),
-        deployer.calculate(
-            deployer_address=deployer_address,
-            deployer_fetched=deployer_fetched,
-            labels_resp=deployer_labels,
-            transactions_resp=deployer_transactions,
-            pnl_resp=deployer_pnl,
-            creator_deploy_count=creator_deploy_count,
             weight_total_pct=WEIGHT_TOTAL_PCT,
         ),
         risk.calculate(

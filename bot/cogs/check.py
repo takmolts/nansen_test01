@@ -13,11 +13,9 @@ from bot import embeds
 from bot.coingecko_client import CoinGeckoClient
 from bot.config import RESPONSE_MODE_INLINE, RESPONSE_MODE_THREAD, Config
 from bot.dexscreener_client import DexScreenerClient
-from bot.helius_client import HeliusClient
 from bot.nansen_client import NansenAPIError, NansenClient
 from bot.scoring import engine as scoring_engine
 from bot.scoring.types import TotalScore
-from bot.solana_rpc import SolanaRPCClient, SolanaRPCError
 from bot.views import ResultView
 
 logger = logging.getLogger(__name__)
@@ -71,15 +69,9 @@ class CheckCog(commands.Cog):
             result = await _run_analysis(
                 api_key=self.config.nansen_api_key,
                 base_url=self.config.nansen_base_url,
-                solana_rpc_url=self.config.solana_rpc_url,
                 coingecko_api_key=(
                     self.config.coingecko_api_key
                     if self.config.coingecko_active
-                    else None
-                ),
-                helius_api_key=(
-                    self.config.helius_api_key
-                    if self.config.helius_active
                     else None
                 ),
                 token_address=ca,
@@ -128,38 +120,15 @@ async def _run_analysis(
     *,
     api_key: str,
     base_url: str,
-    solana_rpc_url: str,
     coingecko_api_key: str | None,
-    helius_api_key: str | None,
     token_address: str,
 ) -> _AnalysisResult:
     async with NansenClient(api_key, base_url, chain="solana") as client:
-        # 並列: token-info / holders / who-bought-sold + deployer 取得
-        async def _fetch_deployer() -> tuple[bool, str | None]:
-            # 1. Helius が使えればそちら優先 (creator を直接取れる)
-            if helius_api_key:
-                try:
-                    async with HeliusClient(helius_api_key) as helius:
-                        creator = await helius.get_creator(token_address)
-                        if creator:
-                            return True, creator
-                except Exception:
-                    logger.exception("Helius creator 取得失敗 → Solana RPC で fallback")
-
-            # 2. Solana RPC で mintAuthority
-            try:
-                async with SolanaRPCClient(solana_rpc_url) as rpc:
-                    return await rpc.fetch_mint_authority(token_address)
-            except Exception:
-                logger.exception("mint authority 取得失敗")
-                return False, None
-
         (
             token_info_r,
             holders_r,
             sm_holders_r,
             sm_r,
-            deployer_result,
             indicators_r,
             flow_r,
             flows_r,
@@ -168,16 +137,11 @@ async def _run_analysis(
             client.holders(token_address),
             client.holders_smart_money(token_address),
             client.who_bought_sold(token_address),
-            _fetch_deployer(),
             client.nansen_indicators(token_address),
             client.flow_intelligence(token_address),
             client.flows(token_address, days=2),  # 24h 増加率算出のため最低 2 点取得
             return_exceptions=True,
         )
-        if isinstance(deployer_result, BaseException):
-            deployer_fetched, deployer_addr = False, None
-        else:
-            deployer_fetched, deployer_addr = deployer_result
 
         holders_list: list[dict] = []
         if not isinstance(holders_r, BaseException):
@@ -222,56 +186,18 @@ async def _run_analysis(
             clusters = [(f, ws) for f, ws in funder_map.items() if len(ws) >= 2]
             clusters.sort(key=lambda c: len(c[1]), reverse=True)
 
-        # Deployer Trust 用データ取得 (mintAuthority があるときのみ) と
         # Narrative 用 DexScreener / CoinGecko を並列取得
-        deployer_labels_r: Any = None
-        deployer_tx_r: Any = None
-        deployer_pnl_r: Any = None
-        creator_deploy_count: int | None = None
-
         symbol_for_search = _extract_symbol(token_info_r)
         narrative_holder = {
             "similar_pairs": [],
             "is_dexscreener_boosted": None,
             "is_coingecko_trending": None,
         }
-
-        async def _fetch_creator_assets() -> None:
-            """Helius で creator が発行した他のアセット数を取得 (シリアルミーマー検出)。"""
-            nonlocal creator_deploy_count
-            if not helius_api_key:
-                return
-            if not (isinstance(deployer_addr, str) and deployer_addr):
-                return
-            try:
-                async with HeliusClient(helius_api_key) as h:
-                    creator_deploy_count = await h.get_creator_asset_count(deployer_addr)
-            except Exception:
-                logger.exception("Helius creator asset count 取得失敗")
-
-        async def _fetch_deployer_profiler() -> None:
-            nonlocal deployer_labels_r, deployer_tx_r, deployer_pnl_r
-            if not (isinstance(deployer_addr, str) and deployer_addr):
-                return
-            deployer_labels_r, deployer_tx_r, deployer_pnl_r = await asyncio.gather(
-                client.labels(deployer_addr),
-                client.oldest_transaction(deployer_addr),
-                client.pnl_summary(deployer_addr),
-                return_exceptions=True,
-            )
-
-        async def _fetch_narrative() -> None:
-            await _populate_narrative(
-                token_address=token_address,
-                symbol=symbol_for_search,
-                coingecko_api_key=coingecko_api_key,
-                holder=narrative_holder,
-            )
-
-        await asyncio.gather(
-            _fetch_deployer_profiler(),
-            _fetch_narrative(),
-            _fetch_creator_assets(),
+        await _populate_narrative(
+            token_address=token_address,
+            symbol=symbol_for_search,
+            coingecko_api_key=coingecko_api_key,
+            holder=narrative_holder,
         )
 
         credits_used = client.credits_used
@@ -293,12 +219,6 @@ async def _run_analysis(
         flows_resp=None if isinstance(flows_r, BaseException) else flows_r,
         whales=whales_sorted,
         clusters=clusters,
-        deployer_address=deployer_addr if isinstance(deployer_addr, str) else None,
-        deployer_fetched=deployer_fetched,
-        deployer_labels=None if isinstance(deployer_labels_r, BaseException) else deployer_labels_r,
-        deployer_transactions=None if isinstance(deployer_tx_r, BaseException) else deployer_tx_r,
-        deployer_pnl=None if isinstance(deployer_pnl_r, BaseException) else deployer_pnl_r,
-        creator_deploy_count=creator_deploy_count,
         nansen_indicators=None if isinstance(indicators_r, BaseException) else indicators_r,
         flow_intelligence=None if isinstance(flow_r, BaseException) else flow_r,
         similar_pairs=narrative_holder.get("similar_pairs"),

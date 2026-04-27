@@ -56,6 +56,34 @@ class DexScreenerClient:
         pairs = data.get("pairs")
         return [p for p in pairs if isinstance(p, dict)] if isinstance(pairs, list) else []
 
+    async def get_token_data(self, token_address: str) -> dict[str, Any] | None:
+        """`/latest/dex/tokens/{addr}` の最初の pair dict を返す。"""
+        data = await self._get(f"/latest/dex/tokens/{token_address}")
+        if not isinstance(data, dict):
+            return None
+        pairs = data.get("pairs")
+        if not isinstance(pairs, list) or not pairs:
+            return None
+        first = pairs[0]
+        return first if isinstance(first, dict) else None
+
+    async def get_token_image_url(self, token_address: str) -> str | None:
+        """対象トークンのアイコン URL (info.imageUrl) を返す。"""
+        data = await self._get(f"/latest/dex/tokens/{token_address}")
+        if not isinstance(data, dict):
+            return None
+        pairs = data.get("pairs")
+        if not isinstance(pairs, list) or not pairs:
+            return None
+        first = pairs[0] if isinstance(pairs[0], dict) else None
+        if first is None:
+            return None
+        info = first.get("info") if isinstance(first.get("info"), dict) else None
+        if not isinstance(info, dict):
+            return None
+        img = info.get("imageUrl")
+        return img if isinstance(img, str) and img.startswith("http") else None
+
     async def is_boosted(self, token_address: str) -> bool:
         """対象トークンが現在 Boost されているか。"""
         data = await self._get("/token-boosts/latest/v1")
