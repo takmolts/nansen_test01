@@ -18,6 +18,8 @@ class Config:
     nansen_api_key: str
     nansen_base_url: str
     solana_rpc_url: str
+    coingecko_api_key: str | None
+    helius_api_key: str | None
     allowed_channel_ids: frozenset[int]
     dev_guild_id: int | None
     response_mode: str
@@ -33,6 +35,12 @@ class Config:
         solana_rpc = os.getenv(
             "SOLANA_RPC_URL", "https://api.mainnet-beta.solana.com"
         ).rstrip("/")
+
+        coingecko_key_raw = os.getenv("COINGECKO_API_KEY", "").strip()
+        coingecko_key = coingecko_key_raw or None
+
+        helius_key_raw = os.getenv("HELIUS_API_KEY", "").strip()
+        helius_key = helius_key_raw or None
 
         raw_channels = os.getenv("ALLOWED_CHANNEL_IDS", "").strip()
         channels: frozenset[int] = frozenset()
@@ -57,6 +65,8 @@ class Config:
             nansen_api_key=nansen_key,
             nansen_base_url=base_url,
             solana_rpc_url=solana_rpc,
+            coingecko_api_key=coingecko_key,
+            helius_api_key=helius_key,
             allowed_channel_ids=channels,
             dev_guild_id=dev_guild_id,
             response_mode=raw_mode,

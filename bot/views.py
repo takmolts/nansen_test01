@@ -82,10 +82,7 @@ class ResultView(discord.ui.View):
             inline=False,
         )
         embed.set_footer(
-            text=(
-                "フェーズB2: 7カテゴリ暫定算出。 "
-                "Narrative は別 API 連携待ち"
-            )
+            text="スコアはあくまで参考値です。積極的な投資を推奨するものではありません"
         )
         return embed
 
@@ -224,6 +221,26 @@ def _format_breakdown(name: str, breakdown: dict, note: str) -> str:
             lines.append(f"・最大クラスタサイズ: {mcs} (検出 {cc} 件) → {_fmt(bs)} / 40pt")
         lines.append("(簡略: 警告ラベル混入・Insider 比は未対応 → 70pt を 100pt 換算)")
 
+    elif name == "Narrative":
+        n = breakdown.get("similar_recent_count")
+        status = breakdown.get("status")
+        sim = breakdown.get("sim_score")
+        is_oldest = breakdown.get("is_oldest")
+        elder = breakdown.get("elder_score")
+        ds_b = breakdown.get("is_dexscreener_boosted")
+        cg_t = breakdown.get("is_coingecko_trending")
+        ts = breakdown.get("trend_score")
+        sc = breakdown.get("social_count")
+        ss = breakdown.get("social_score")
+
+        lines.append(f"・類似トークン (7日内): {n} 件 / status=`{status}` → {_fmt(sim)} / 40pt")
+        oldest_label = "✅" if is_oldest else "❌"
+        lines.append(f"・自トークンが最古か: {oldest_label} → {_fmt(elder)} / 25pt")
+        ds_label = "✅" if ds_b else ("?" if ds_b is None else "❌")
+        cg_label = "✅" if cg_t else ("? (CoinGecko key 未設定)" if cg_t is None else "❌")
+        lines.append(f"・DexScreener Boost: {ds_label} / CoinGecko Trending: {cg_label} → {_fmt(ts)} / 25pt")
+        lines.append(f"・ソーシャル ({sc}/3 link) → {_fmt(ss)} / 10pt")
+
     elif name == "Risk":
         btc_label = breakdown.get("btc_signal")
         bs = breakdown.get("btc_score")
@@ -245,8 +262,9 @@ def _format_breakdown(name: str, breakdown: dict, note: str) -> str:
             lines.append(f"・トークン年齢: {ad}日 → {_fmt(ags)} / 20pt")
         else:
             lines.append(f"・トークン年齢: 不明 → {_fmt(ags)} / 20pt")
-        ni_parts = [f"{k}={v or '?'}" for k, v in ni_summary.items()]
-        lines.append(f"・Nansen 独自リスク ({', '.join(ni_parts) or '取得不可'}) → {_fmt(nis)} / 25pt")
+        ni_parts = [f"{k}={v}" for k, v in ni_summary.items() if v is not None]
+        ni_label = ", ".join(ni_parts) if ni_parts else "Nansen 側で未計算"
+        lines.append(f"・Nansen 独自リスク ({ni_label}) → {_fmt(nis)} / 25pt")
 
     elif name == "Deployer Trust":
         if not breakdown.get("fetched", True):

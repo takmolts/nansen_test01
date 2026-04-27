@@ -10,7 +10,10 @@ from discord import app_commands
 from discord.ext import commands
 
 from bot import embeds
+from bot.coingecko_client import CoinGeckoClient
 from bot.config import RESPONSE_MODE_INLINE, RESPONSE_MODE_THREAD, Config
+from bot.dexscreener_client import DexScreenerClient
+from bot.helius_client import HeliusClient
 from bot.nansen_client import NansenAPIError, NansenClient
 from bot.scoring import engine as scoring_engine
 from bot.scoring.types import TotalScore
@@ -69,6 +72,8 @@ class CheckCog(commands.Cog):
                 api_key=self.config.nansen_api_key,
                 base_url=self.config.nansen_base_url,
                 solana_rpc_url=self.config.solana_rpc_url,
+                coingecko_api_key=self.config.coingecko_api_key,
+                helius_api_key=self.config.helius_api_key,
                 token_address=ca,
             )
         except Exception:
@@ -116,11 +121,24 @@ async def _run_analysis(
     api_key: str,
     base_url: str,
     solana_rpc_url: str,
+    coingecko_api_key: str | None,
+    helius_api_key: str | None,
     token_address: str,
 ) -> _AnalysisResult:
     async with NansenClient(api_key, base_url, chain="solana") as client:
-        # 並列: token-info / holders / who-bought-sold + Solana RPC で deployer 取得
+        # 並列: token-info / holders / who-bought-sold + deployer 取得
         async def _fetch_deployer() -> tuple[bool, str | None]:
+            # 1. Helius が使えればそちら優先 (creator を直接取れる)
+            if helius_api_key:
+                try:
+                    async with HeliusClient(helius_api_key) as helius:
+                        creator = await helius.get_creator(token_address)
+                        if creator:
+                            return True, creator
+                except Exception:
+                    logger.exception("Helius creator 取得失敗 → Solana RPC で fallback")
+
+            # 2. Solana RPC で mintAuthority
             try:
                 async with SolanaRPCClient(solana_rpc_url) as rpc:
                     return await rpc.fetch_mint_authority(token_address)
@@ -192,17 +210,39 @@ async def _run_analysis(
             clusters = [(f, ws) for f, ws in funder_map.items() if len(ws) >= 2]
             clusters.sort(key=lambda c: len(c[1]), reverse=True)
 
-        # Deployer Trust 用データ取得 (mintAuthority があるときのみ)
+        # Deployer Trust 用データ取得 (mintAuthority があるときのみ) と
+        # Narrative 用 DexScreener / CoinGecko を並列取得
         deployer_labels_r: Any = None
         deployer_tx_r: Any = None
         deployer_pnl_r: Any = None
-        if isinstance(deployer_addr, str) and deployer_addr:
+
+        symbol_for_search = _extract_symbol(token_info_r)
+        narrative_holder = {
+            "similar_pairs": [],
+            "is_dexscreener_boosted": None,
+            "is_coingecko_trending": None,
+        }
+
+        async def _fetch_deployer_profiler() -> None:
+            nonlocal deployer_labels_r, deployer_tx_r, deployer_pnl_r
+            if not (isinstance(deployer_addr, str) and deployer_addr):
+                return
             deployer_labels_r, deployer_tx_r, deployer_pnl_r = await asyncio.gather(
                 client.labels(deployer_addr),
                 client.oldest_transaction(deployer_addr),
                 client.pnl_summary(deployer_addr),
                 return_exceptions=True,
             )
+
+        async def _fetch_narrative() -> None:
+            await _populate_narrative(
+                token_address=token_address,
+                symbol=symbol_for_search,
+                coingecko_api_key=coingecko_api_key,
+                holder=narrative_holder,
+            )
+
+        await asyncio.gather(_fetch_deployer_profiler(), _fetch_narrative())
 
         credits_used = client.credits_used
 
@@ -214,6 +254,7 @@ async def _run_analysis(
         reverse=True,
     )
     scores = scoring_engine.calculate_scores(
+        token_address=token_address,
         token_info=None if isinstance(token_info_r, BaseException) else token_info_r,
         sm_data=None if isinstance(sm_r, BaseException) else sm_r,
         holder_pcts_desc=holder_pcts_desc,
@@ -227,6 +268,9 @@ async def _run_analysis(
         deployer_pnl=None if isinstance(deployer_pnl_r, BaseException) else deployer_pnl_r,
         nansen_indicators=None if isinstance(indicators_r, BaseException) else indicators_r,
         flow_intelligence=None if isinstance(flow_r, BaseException) else flow_r,
+        similar_pairs=narrative_holder.get("similar_pairs"),
+        is_dexscreener_boosted=narrative_holder.get("is_dexscreener_boosted"),
+        is_coingecko_trending=narrative_holder.get("is_coingecko_trending"),
     )
 
     embed_list: list[discord.Embed] = []
@@ -288,6 +332,49 @@ def _extract_total_holders(token_info: Any) -> int | None:
         return int(raw)
     except (TypeError, ValueError):
         return None
+
+
+async def _populate_narrative(
+    *,
+    token_address: str,
+    symbol: str,
+    coingecko_api_key: str | None,
+    holder: dict[str, Any],
+) -> None:
+    """DexScreener / CoinGecko から Narrative 用データを取得し holder に書き込む。"""
+    async def _ds_part() -> None:
+        try:
+            async with DexScreenerClient() as ds:
+                if symbol:
+                    try:
+                        holder["similar_pairs"] = await ds.search(symbol)
+                    except Exception:
+                        logger.exception("DexScreener search 失敗")
+                try:
+                    holder["is_dexscreener_boosted"] = await ds.is_boosted(token_address)
+                except Exception:
+                    logger.exception("DexScreener is_boosted 失敗")
+        except Exception:
+            logger.exception("DexScreener セッション初期化失敗")
+
+    async def _cg_part() -> None:
+        if not coingecko_api_key:
+            # キー未設定時は trending 判定スキップ
+            return
+        try:
+            async with CoinGeckoClient(coingecko_api_key) as cg:
+                coin = await cg.get_coin_by_contract("solana", token_address)
+                cg_id = coin.get("id") if isinstance(coin, dict) else None
+                if not cg_id:
+                    holder["is_coingecko_trending"] = False
+                    return
+                trending = await cg.trending_coin_ids()
+                holder["is_coingecko_trending"] = cg_id in trending
+        except Exception:
+            logger.exception("CoinGecko 取得失敗")
+            holder["is_coingecko_trending"] = None
+
+    await asyncio.gather(_ds_part(), _cg_part())
 
 
 def _err_msg(result: object) -> str | None:

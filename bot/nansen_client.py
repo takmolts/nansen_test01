@@ -141,9 +141,9 @@ class NansenClient:
         )
 
     async def nansen_indicators(self, token_address: str) -> Any:
-        """Nansen 独自リスク/リワード指標。"""
+        """Nansen 独自リスク/リワード指標 (path は /tgm/indicators)。"""
         return await self._post(
-            "/tgm/nansen-indicators",
+            "/tgm/indicators",
             {
                 "chain": self._chain,
                 "token_address": token_address,

@@ -3,7 +3,7 @@
 cog から API レスポンスとバンドル検出の中間結果を受け取り、各カテゴリスコアと
 総合スコアを TotalScore として返す。
 
-フェーズB2: Risk 追加 (7カテゴリ、合計重み 85% を 100% に再正規化)
+フェーズB3 (完成形): 8カテゴリ、合計重み 100% (再正規化不要)
 """
 from __future__ import annotations
 
@@ -15,18 +15,20 @@ from bot.scoring import (
     distribution,
     liquidity,
     momentum,
+    narrative,
     risk,
     smart_money,
 )
 from bot.scoring.types import TotalScore
 
-# 現フェーズで実装済みカテゴリの設計書重みの合計 (%)
-# SM 20 + Mom 12 + Liq 12 + Dist 8 + Bundle 13 + Deployer 8 + Risk 12 = 85
-WEIGHT_TOTAL_PCT = 85
+# 設計書通りの 8 カテゴリ重み合計 (= 100)
+# SM 20 + Mom 12 + Liq 12 + Dist 8 + Bundle 13 + Deployer 8 + Risk 12 + Narr 15 = 100
+WEIGHT_TOTAL_PCT = 100
 
 
 def calculate_scores(
     *,
+    token_address: str,
     token_info: Any,
     sm_data: Any,
     holder_pcts_desc: list[float],
@@ -40,6 +42,9 @@ def calculate_scores(
     deployer_pnl: Any,
     nansen_indicators: Any,
     flow_intelligence: Any,
+    similar_pairs: list[dict[str, Any]] | None,
+    is_dexscreener_boosted: bool | None,
+    is_coingecko_trending: bool | None,
 ) -> TotalScore:
     cats = [
         smart_money.calculate(sm_data, weight_total_pct=WEIGHT_TOTAL_PCT),
@@ -67,6 +72,14 @@ def calculate_scores(
             token_info=token_info,
             nansen_indicators_resp=nansen_indicators,
             flow_intelligence_resp=flow_intelligence,
+            weight_total_pct=WEIGHT_TOTAL_PCT,
+        ),
+        narrative.calculate(
+            token_info=token_info,
+            token_address=token_address,
+            similar_pairs=similar_pairs,
+            is_dexscreener_boosted=is_dexscreener_boosted,
+            is_coingecko_trending=is_coingecko_trending,
             weight_total_pct=WEIGHT_TOTAL_PCT,
         ),
     ]
