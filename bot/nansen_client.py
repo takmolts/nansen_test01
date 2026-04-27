@@ -32,6 +32,7 @@ CREDIT_COST: dict[str, int] = {
     "nansen_indicators": 1,
     "flow_intelligence": 1,
     "flows": 1,
+    "token_screener": 1,
 }
 
 API_PREFIX = "/api/v1"
@@ -201,6 +202,37 @@ class NansenClient:
                 "token_address": token_address,
             },
             credit_key="nansen_indicators",
+        )
+
+    async def token_screener(
+        self,
+        *,
+        chains: list[str] | None = None,
+        timeframe: str = "24h",
+        trader_type: str | None = None,
+        token_age_days_max: int | None = None,
+        sort_field: str = "volume",
+        sort_direction: str = "DESC",
+        limit: int = 10,
+    ) -> Any:
+        """トークン横断スクリーナー (path は /api/v1/token-screener、 tgm 配下ではない)。"""
+        filters: dict[str, Any] = {}
+        if trader_type:
+            filters["trader_type"] = trader_type
+        if token_age_days_max is not None:
+            filters["token_age_days"] = {"min": 1, "max": token_age_days_max}
+        return await self._post(
+            "/token-screener",
+            {
+                "chains": list(chains) if chains else [self._chain],
+                "timeframe": timeframe,
+                "filters": filters,
+                "order_by": [
+                    {"field": sort_field, "direction": sort_direction},
+                ],
+                "pagination": {"page": 1, "per_page": limit},
+            },
+            credit_key="token_screener",
         )
 
     async def flow_intelligence(

@@ -12,6 +12,12 @@ from typing import TYPE_CHECKING, Any
 
 import discord
 
+from bot.links import (
+    solscan_account_url,
+    solscan_token_url,
+    trade_links_md,
+)
+
 if TYPE_CHECKING:
     from bot.scoring.types import TotalScore
 
@@ -114,11 +120,11 @@ def _to_float(value: Any) -> float | None:
 
 
 def _solscan_url(address: str) -> str:
-    return f"https://solscan.io/token/{address}"
+    return solscan_token_url(address)
 
 
 def _solscan_account_url(address: str) -> str:
-    return f"https://solscan.io/account/{address}"
+    return solscan_account_url(address)
 
 
 # =========================
@@ -203,6 +209,12 @@ def build_token_info_embed(
     embed.add_field(name="🔁 Buy/Sell (24h)", value=ratio_str, inline=True)
     embed.add_field(name="👥 Holders", value=_fmt_int(holders_total), inline=True)
 
+    embed.add_field(
+        name="🔗 Trade",
+        value=trade_links_md(token_address, chain="solana"),
+        inline=False,
+    )
+
     socials: list[str] = []
     if isinstance(website, str) and website.startswith("http"):
         socials.append(f"[Web]({website})")
@@ -211,7 +223,7 @@ def build_token_info_embed(
     if isinstance(telegram_url, str) and telegram_url.startswith("http"):
         socials.append(f"[TG]({telegram_url})")
     if socials:
-        embed.add_field(name="🔗 Socials", value=" | ".join(socials), inline=False)
+        embed.add_field(name="🌐 Socials", value=" | ".join(socials), inline=False)
 
     return embed
 

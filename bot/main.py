@@ -50,6 +50,7 @@ async def _run() -> None:
             logger.exception("Slash コマンドの同期に失敗しました")
 
     await bot.load_extension("bot.cogs.check")
+    await bot.load_extension("bot.cogs.digest")
     await bot.start(config.discord_bot_token)
 
 
