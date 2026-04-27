@@ -31,8 +31,10 @@ def calculate_scores(
     token_address: str,
     token_info: Any,
     sm_data: Any,
+    sm_holders: Any,
     holder_pcts_desc: list[float],
     total_holders: int | None,
+    flows_resp: Any,
     whales: list[dict[str, Any]],
     clusters: list[tuple[str, list[dict[str, Any]]]],
     deployer_address: str | None,
@@ -48,12 +50,18 @@ def calculate_scores(
     is_coingecko_trending: bool | None,
 ) -> TotalScore:
     cats = [
-        smart_money.calculate(sm_data, weight_total_pct=WEIGHT_TOTAL_PCT),
+        smart_money.calculate(
+            sm_holders_resp=sm_holders,
+            flow_intelligence_resp=flow_intelligence,
+            who_bought_sold_resp=sm_data,
+            weight_total_pct=WEIGHT_TOTAL_PCT,
+        ),
         momentum.calculate(token_info, weight_total_pct=WEIGHT_TOTAL_PCT),
         liquidity.calculate(token_info, weight_total_pct=WEIGHT_TOTAL_PCT),
         distribution.calculate(
             holder_pcts_desc=holder_pcts_desc,
             total_holders=total_holders,
+            flows_resp=flows_resp,
             weight_total_pct=WEIGHT_TOTAL_PCT,
         ),
         bundle.calculate(

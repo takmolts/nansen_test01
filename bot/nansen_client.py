@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 CREDIT_COST: dict[str, int] = {
     "token_information": 1,
     "holders": 5,
+    "holders_smart_money": 5,
     "who_bought_sold": 1,
     "related_wallets": 1,
     "labels": 1,
@@ -30,6 +31,7 @@ CREDIT_COST: dict[str, int] = {
     "pnl_summary": 1,
     "nansen_indicators": 1,
     "flow_intelligence": 1,
+    "flows": 1,
 }
 
 API_PREFIX = "/api/v1"
@@ -117,6 +119,56 @@ class NansenClient:
                 "timeframe": timeframe,
             },
             credit_key="token_information",
+        )
+
+    async def holders_smart_money(
+        self,
+        token_address: str,
+        *,
+        per_page: int = 100,
+    ) -> Any:
+        """Smart Money ホルダーのみを返す (label_type=smart_money)。"""
+        return await self._post(
+            "/tgm/holders",
+            {
+                "chain": self._chain,
+                "token_address": token_address,
+                "aggregate_by_entity": False,
+                "label_type": "smart_money",
+                "pagination": {"page": 1, "per_page": per_page},
+                "premium_labels": False,
+                "order_by": [
+                    {"field": "ownership_percentage", "direction": "DESC"},
+                ],
+            },
+            credit_key="holders_smart_money",
+        )
+
+    async def flows(
+        self,
+        token_address: str,
+        *,
+        days: int = 7,
+        label: str = "top_100_holders",
+        per_page: int = 50,
+    ) -> Any:
+        """日別 holders_count + flow 推移 (Distribution 増加率算出に使う)。"""
+        now = datetime.now(timezone.utc)
+        date_from = (now - timedelta(days=days)).strftime("%Y-%m-%dT00:00:00Z")
+        date_to = now.strftime("%Y-%m-%dT23:59:59Z")
+        return await self._post(
+            "/tgm/flows",
+            {
+                "chain": self._chain,
+                "token_address": token_address,
+                "label": label,
+                "date": {"from": date_from, "to": date_to},
+                "pagination": {"page": 1, "per_page": per_page},
+                "order_by": [
+                    {"field": "date", "direction": "ASC"},
+                ],
+            },
+            credit_key="flows",
         )
 
     async def holders(self, token_address: str, *, per_page: int = 100) -> Any:

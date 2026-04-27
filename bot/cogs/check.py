@@ -157,17 +157,21 @@ async def _run_analysis(
         (
             token_info_r,
             holders_r,
+            sm_holders_r,
             sm_r,
             deployer_result,
             indicators_r,
             flow_r,
+            flows_r,
         ) = await asyncio.gather(
             client.token_information(token_address),
             client.holders(token_address),
+            client.holders_smart_money(token_address),
             client.who_bought_sold(token_address),
             _fetch_deployer(),
             client.nansen_indicators(token_address),
             client.flow_intelligence(token_address),
+            client.flows(token_address, days=2),  # 24h 増加率算出のため最低 2 点取得
             return_exceptions=True,
         )
         if isinstance(deployer_result, BaseException):
@@ -283,8 +287,10 @@ async def _run_analysis(
         token_address=token_address,
         token_info=None if isinstance(token_info_r, BaseException) else token_info_r,
         sm_data=None if isinstance(sm_r, BaseException) else sm_r,
+        sm_holders=None if isinstance(sm_holders_r, BaseException) else sm_holders_r,
         holder_pcts_desc=holder_pcts_desc,
         total_holders=total_holders,
+        flows_resp=None if isinstance(flows_r, BaseException) else flows_r,
         whales=whales_sorted,
         clusters=clusters,
         deployer_address=deployer_addr if isinstance(deployer_addr, str) else None,

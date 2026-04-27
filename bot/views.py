@@ -164,15 +164,25 @@ def _format_breakdown(name: str, breakdown: dict, note: str) -> str:
 
     lines: list[str] = []
     if name == "Smart Money":
-        bc = breakdown.get("buy_count")
-        ba = breakdown.get("buy_amount_usd")
-        cs = breakdown.get("count_score")
-        as_ = breakdown.get("amount_score")
-        if bc is not None:
-            lines.append(f"・SM 買い件数 7d: {int(bc)}人 → {_fmt(cs)} / 50pt")
-        if ba is not None:
-            lines.append(f"・SM 買い額 7d: {_fmt_usd(ba)} → {_fmt(as_)} / 50pt")
-        lines.append("(簡略: 保有SM数とネットフローは未対応)")
+        sh = breakdown.get("sm_holder_count")
+        shs = breakdown.get("sm_holder_score")
+        nf = breakdown.get("smart_trader_net_flow_usd")
+        nfs = breakdown.get("sm_flow_score")
+        nb = breakdown.get("new_buyers_count")
+        nbs = breakdown.get("sm_new_buyer_score")
+        if sh is not None:
+            lines.append(f"・SM 保有ウォレット: {sh}件 → {_fmt(shs)} / 40pt")
+        else:
+            lines.append(f"・SM 保有ウォレット: 取得不可 → {_fmt(shs)} / 40pt")
+        if nf is not None:
+            sign = "+" if nf > 0 else ""
+            lines.append(f"・SM ネットフロー: {sign}{_fmt_usd(nf)} → {_fmt(nfs)} / ±35pt")
+        else:
+            lines.append(f"・SM ネットフロー: 取得不可 → {_fmt(nfs)} / ±35pt")
+        if nb is not None:
+            lines.append(f"・SM 新規買い (直近 7d): {nb}件 → {_fmt(nbs)} / 25pt")
+        else:
+            lines.append(f"・SM 新規買い: 取得不可 → {_fmt(nbs)} / 25pt")
 
     elif name == "Momentum":
         bsr = breakdown.get("buy_sell_ratio")
@@ -204,11 +214,17 @@ def _format_breakdown(name: str, breakdown: dict, note: str) -> str:
         top10 = breakdown.get("top10_concentration_pct")
         ts = breakdown.get("th_score")
         t10s = breakdown.get("t10_score")
+        ng = breakdown.get("holder_growth_24h_ratio")
+        nhs = breakdown.get("nh_score")
         if th is not None:
             lines.append(f"・総ホルダー: {int(th):,} → {_fmt(ts)} / 35pt")
         if top10 is not None:
             lines.append(f"・Top10 集中度: {top10:.2f}% → {_fmt(t10s)} / 40pt")
-        lines.append("(簡略: 新規ホルダー増加率は未対応 → 75pt を 100pt 換算)")
+        if ng is not None:
+            sign = "+" if ng >= 0 else ""
+            lines.append(f"・24h ホルダー増加率: {sign}{ng*100:.2f}% → {_fmt(nhs)} / 25pt")
+        else:
+            lines.append(f"・24h ホルダー増加率: 取得不可 → {_fmt(nhs)} / 25pt")
 
     elif name == "Bundle Safety":
         wc = breakdown.get("whale_count")
