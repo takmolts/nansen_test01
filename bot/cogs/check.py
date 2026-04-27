@@ -72,8 +72,16 @@ class CheckCog(commands.Cog):
                 api_key=self.config.nansen_api_key,
                 base_url=self.config.nansen_base_url,
                 solana_rpc_url=self.config.solana_rpc_url,
-                coingecko_api_key=self.config.coingecko_api_key,
-                helius_api_key=self.config.helius_api_key,
+                coingecko_api_key=(
+                    self.config.coingecko_api_key
+                    if self.config.coingecko_active
+                    else None
+                ),
+                helius_api_key=(
+                    self.config.helius_api_key
+                    if self.config.helius_active
+                    else None
+                ),
                 token_address=ca,
             )
         except Exception:
@@ -215,6 +223,7 @@ async def _run_analysis(
         deployer_labels_r: Any = None
         deployer_tx_r: Any = None
         deployer_pnl_r: Any = None
+        creator_deploy_count: int | None = None
 
         symbol_for_search = _extract_symbol(token_info_r)
         narrative_holder = {
@@ -222,6 +231,19 @@ async def _run_analysis(
             "is_dexscreener_boosted": None,
             "is_coingecko_trending": None,
         }
+
+        async def _fetch_creator_assets() -> None:
+            """Helius で creator が発行した他のアセット数を取得 (シリアルミーマー検出)。"""
+            nonlocal creator_deploy_count
+            if not helius_api_key:
+                return
+            if not (isinstance(deployer_addr, str) and deployer_addr):
+                return
+            try:
+                async with HeliusClient(helius_api_key) as h:
+                    creator_deploy_count = await h.get_creator_asset_count(deployer_addr)
+            except Exception:
+                logger.exception("Helius creator asset count 取得失敗")
 
         async def _fetch_deployer_profiler() -> None:
             nonlocal deployer_labels_r, deployer_tx_r, deployer_pnl_r
@@ -242,7 +264,11 @@ async def _run_analysis(
                 holder=narrative_holder,
             )
 
-        await asyncio.gather(_fetch_deployer_profiler(), _fetch_narrative())
+        await asyncio.gather(
+            _fetch_deployer_profiler(),
+            _fetch_narrative(),
+            _fetch_creator_assets(),
+        )
 
         credits_used = client.credits_used
 
@@ -266,6 +292,7 @@ async def _run_analysis(
         deployer_labels=None if isinstance(deployer_labels_r, BaseException) else deployer_labels_r,
         deployer_transactions=None if isinstance(deployer_tx_r, BaseException) else deployer_tx_r,
         deployer_pnl=None if isinstance(deployer_pnl_r, BaseException) else deployer_pnl_r,
+        creator_deploy_count=creator_deploy_count,
         nansen_indicators=None if isinstance(indicators_r, BaseException) else indicators_r,
         flow_intelligence=None if isinstance(flow_r, BaseException) else flow_r,
         similar_pairs=narrative_holder.get("similar_pairs"),

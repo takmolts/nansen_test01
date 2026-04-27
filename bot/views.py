@@ -39,7 +39,7 @@ class ResultView(discord.ui.View):
             self.remove_item(self.help_button)
 
     # ----- ヘルプ -----
-    @discord.ui.button(label="📖 スコア根拠", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="📖 スコア詳細", style=discord.ButtonStyle.secondary)
     async def help_button(
         self,
         interaction: discord.Interaction,
@@ -64,10 +64,11 @@ class ResultView(discord.ui.View):
         )
 
         for c in s.categories:
-            value = _format_breakdown(c.name, c.breakdown, c.note)
+            value = _format_breakdown(c.name, c.breakdown, c.note) or "-"
+            value = _truncate(value, 1024)
             embed.add_field(
                 name=f"{c.emoji} {c.name}: {c.score:.1f} / 100  (重み {c.weight*100:.1f}%)",
-                value=value or "-",
+                value=value,
                 inline=False,
             )
 
@@ -234,6 +235,9 @@ def _format_breakdown(name: str, breakdown: dict, note: str) -> str:
         ss = breakdown.get("social_score")
 
         lines.append(f"・類似トークン (7日内): {n} 件 / status=`{status}` → {_fmt(sim)} / 40pt")
+        similar_tokens = breakdown.get("similar_tokens") or []
+        if similar_tokens:
+            lines.append(_format_similar_tokens(similar_tokens, limit=5))
         oldest_label = "✅" if is_oldest else "❌"
         lines.append(f"・自トークンが最古か: {oldest_label} → {_fmt(elder)} / 25pt")
         ds_label = "✅" if ds_b else ("?" if ds_b is None else "❌")
@@ -286,6 +290,11 @@ def _format_breakdown(name: str, breakdown: dict, note: str) -> str:
                 lines.append(f"・deployer: `{addr[:6]}...{addr[-4:]}`")
             if labels:
                 lines.append(f"・ラベル: {', '.join(labels[:5]) or 'なし'}")
+            cdc = breakdown.get("creator_deploy_count")
+            sp = breakdown.get("serial_penalty") or 0
+            if cdc is not None:
+                serial_note = f" (シリアル -{sp}pt)" if sp else ""
+                lines.append(f"・creator の他 deploy 数: {cdc} 件{serial_note}")
             lines.append(f"・警告ラベル判定 → {_fmt(ws)} / 40pt")
             if ds is not None:
                 lines.append(f"・アカウント年齢: {ds}日 → {_fmt(ages)} / 25pt")
@@ -304,6 +313,27 @@ def _format_breakdown(name: str, breakdown: dict, note: str) -> str:
 
     if note:
         lines.append(f"※ {note}")
+    return "\n".join(lines)
+
+
+def _truncate(text: str, limit: int) -> str:
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 1)] + "…"
+
+
+def _format_similar_tokens(tokens: list[dict], *, limit: int = 10) -> str:
+    """類似トークンを ↳ プレフィクス付きで列挙する (Discord の bullet 解釈を回避)。"""
+    lines: list[str] = []
+    for t in tokens[:limit]:
+        sym = (t.get("symbol") or "?").upper()
+        addr = t.get("address") or ""
+        short = f"{addr[:4]}...{addr[-4:]}" if len(addr) > 8 else addr
+        url = f"https://solscan.io/token/{addr}" if addr else None
+        link = f"[{short}]({url})" if url else short
+        lines.append(f"　↳ `${sym}` {link}")
+    if len(tokens) > limit:
+        lines.append(f"　↳ ...他 {len(tokens) - limit} 件")
     return "\n".join(lines)
 
 

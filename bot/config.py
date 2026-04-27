@@ -20,10 +20,20 @@ class Config:
     solana_rpc_url: str
     coingecko_api_key: str | None
     helius_api_key: str | None
+    enable_helius: bool
+    enable_coingecko: bool
     allowed_channel_ids: frozenset[int]
     dev_guild_id: int | None
     response_mode: str
     log_level: str
+
+    @property
+    def helius_active(self) -> bool:
+        return self.enable_helius and bool(self.helius_api_key)
+
+    @property
+    def coingecko_active(self) -> bool:
+        return self.enable_coingecko and bool(self.coingecko_api_key)
 
     @classmethod
     def load(cls) -> "Config":
@@ -41,6 +51,9 @@ class Config:
 
         helius_key_raw = os.getenv("HELIUS_API_KEY", "").strip()
         helius_key = helius_key_raw or None
+
+        enable_helius = _parse_bool(os.getenv("ENABLE_HELIUS"), default=True)
+        enable_coingecko = _parse_bool(os.getenv("ENABLE_COINGECKO"), default=True)
 
         raw_channels = os.getenv("ALLOWED_CHANNEL_IDS", "").strip()
         channels: frozenset[int] = frozenset()
@@ -67,6 +80,8 @@ class Config:
             solana_rpc_url=solana_rpc,
             coingecko_api_key=coingecko_key,
             helius_api_key=helius_key,
+            enable_helius=enable_helius,
+            enable_coingecko=enable_coingecko,
             allowed_channel_ids=channels,
             dev_guild_id=dev_guild_id,
             response_mode=raw_mode,
@@ -79,3 +94,16 @@ def _require(key: str) -> str:
     if not value:
         raise RuntimeError(f"環境変数 {key} が設定されていません (.env を確認してください)")
     return value
+
+
+def _parse_bool(raw: str | None, *, default: bool) -> bool:
+    if raw is None:
+        return default
+    s = raw.strip().lower()
+    if not s:
+        return default
+    if s in ("true", "1", "yes", "on"):
+        return True
+    if s in ("false", "0", "no", "off"):
+        return False
+    return default

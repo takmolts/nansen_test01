@@ -81,3 +81,29 @@ class HeliusClient:
                 if isinstance(addr, str) and addr:
                     return addr
         return None
+
+    async def get_creator_asset_count(self, creator_address: str) -> int | None:
+        """creator が発行 (Metaplex Metadata で記録) したアセット総数を返す。
+
+        ミームコイン領域では「同 creator が短期間に大量発行 = シリアルミーマー」シグナル。
+        """
+        result = await self._post({
+            "jsonrpc": "2.0",
+            "id": "1",
+            "method": "getAssetsByCreator",
+            "params": {
+                "creatorAddress": creator_address,
+                "onlyVerified": False,
+                "page": 1,
+                "limit": 1000,
+            },
+        })
+        if not isinstance(result, dict):
+            return None
+        total = result.get("total")
+        if isinstance(total, (int, float)):
+            return int(total)
+        items = result.get("items")
+        if isinstance(items, list):
+            return len(items)
+        return None

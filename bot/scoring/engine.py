@@ -40,6 +40,7 @@ def calculate_scores(
     deployer_labels: Any,
     deployer_transactions: Any,
     deployer_pnl: Any,
+    creator_deploy_count: int | None,
     nansen_indicators: Any,
     flow_intelligence: Any,
     similar_pairs: list[dict[str, Any]] | None,
@@ -66,6 +67,7 @@ def calculate_scores(
             labels_resp=deployer_labels,
             transactions_resp=deployer_transactions,
             pnl_resp=deployer_pnl,
+            creator_deploy_count=creator_deploy_count,
             weight_total_pct=WEIGHT_TOTAL_PCT,
         ),
         risk.calculate(

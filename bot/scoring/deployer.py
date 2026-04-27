@@ -29,6 +29,7 @@ def calculate(
     labels_resp: Any,
     transactions_resp: Any,
     pnl_resp: Any,
+    creator_deploy_count: int | None,
     weight_total_pct: int,
 ) -> CategoryScore:
     """
@@ -75,6 +76,10 @@ def calculate(
     else:
         warn_score = 40
 
+    # シリアルミーマー減点 (Helius creator deploy 数を見て上から差し引く)
+    serial_penalty = _serial_penalty(creator_deploy_count)
+    warn_score = max(0, warn_score - serial_penalty)
+
     # アカウント年齢 (max 25)
     days_active = _calc_days_active(transactions_resp)
     if days_active is None:
@@ -113,6 +118,8 @@ def calculate(
             "deployer_address": deployer_address,
             "labels": deployer_labels,
             "warn_score": warn_score,
+            "creator_deploy_count": creator_deploy_count,
+            "serial_penalty": serial_penalty,
             "days_active": days_active,
             "age_score": age_score,
             "win_rate": win_rate,
@@ -121,6 +128,19 @@ def calculate(
             "rel_score": rel_score,
         },
     )
+
+
+def _serial_penalty(deploy_count: int | None) -> int:
+    """creator が発行した token 数からシリアルミーマー減点を返す。"""
+    if not isinstance(deploy_count, int):
+        return 0
+    if deploy_count >= 50:
+        return 25
+    if deploy_count >= 20:
+        return 15
+    if deploy_count >= 5:
+        return 5
+    return 0
 
 
 def _extract_labels(labels_resp: Any) -> list[str]:

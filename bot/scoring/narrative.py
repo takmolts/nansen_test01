@@ -27,10 +27,11 @@ def calculate(
     weight = RAW_WEIGHT_PCT / weight_total_pct
 
     self_deploy = _self_deploy_dt(token_info)
-    similar_recent = _filter_recent_similar(
+    similar_tokens = _extract_similar_tokens(
         similar_pairs or [],
         self_address=token_address,
     )
+    similar_recent = [t["deploy_dt"] for t in similar_tokens]
 
     is_oldest = _is_oldest(self_deploy, similar_recent)
     is_early_half = _is_early_half(self_deploy, similar_recent)
@@ -83,6 +84,7 @@ def calculate(
         weight=weight,
         breakdown={
             "similar_recent_count": n,
+            "similar_tokens": similar_tokens,
             "status": status,
             "sim_score": sim_score,
             "is_oldest": is_oldest,
@@ -113,17 +115,18 @@ def _self_deploy_dt(token_info: Any) -> datetime | None:
     return dt
 
 
-def _filter_recent_similar(
+def _extract_similar_tokens(
     pairs: list[dict[str, Any]],
     *,
     self_address: str,
-) -> list[datetime]:
-    """類似 pair の中で deploy が直近 SIMILAR_DAYS 以内のものの datetime リストを返す。
+) -> list[dict[str, Any]]:
+    """直近 SIMILAR_DAYS 以内の類似トークン情報を返す (deploy 日時昇順)。
 
-    自トークン自身は除外。 同じトークンが複数 DEX に存在する場合は最古の pairCreatedAt を採用。
+    自トークン自身は除外。 同じトークンが複数 pair に存在する場合は最古の pairCreatedAt を採用。
+    各要素は {address, symbol, name, deploy_dt} の dict。
     """
     self_lower = self_address.lower()
-    by_token: dict[str, datetime] = {}
+    by_token: dict[str, dict[str, Any]] = {}
     now = datetime.now(timezone.utc)
     threshold = now.timestamp() - SIMILAR_DAYS * 24 * 3600
 
@@ -140,12 +143,18 @@ def _filter_recent_similar(
         ts_sec = created / 1000.0
         if ts_sec < threshold:
             continue
-        existing = by_token.get(addr.lower())
         dt = datetime.fromtimestamp(ts_sec, tz=timezone.utc)
-        if existing is None or dt < existing:
-            by_token[addr.lower()] = dt
+        key = addr.lower()
+        existing = by_token.get(key)
+        if existing is None or dt < existing["deploy_dt"]:
+            by_token[key] = {
+                "address": addr,
+                "symbol": str(base.get("symbol") or ""),
+                "name": str(base.get("name") or ""),
+                "deploy_dt": dt,
+            }
 
-    return sorted(by_token.values())
+    return sorted(by_token.values(), key=lambda x: x["deploy_dt"])
 
 
 def _is_oldest(self_deploy: datetime | None, similar_recent: list[datetime]) -> bool:
