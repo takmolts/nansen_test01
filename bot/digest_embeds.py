@@ -109,9 +109,14 @@ def _format_row_momentum(rank: int, t: dict[str, Any]) -> str:
     pc = t.get("price_change")
     pc_str = _fmt_pct_signed(pc) if pc is not None else "?"
     mcap = _fmt_usd(t.get("market_cap_usd"))
-    age = _fmt_days(t.get("token_age_days"))
-    line1 = f"**{rank}. ${sym}** — vol {vol} ({pc_str}) | mcap {mcap} | {age}"
-    return f"{line1}\n{_link_line(addr, sym)}"
+    age = _fmt_age_value(t.get("token_age_days"))
+
+    metrics = [
+        f"🪙 mcap: **{mcap}**",
+        f"⚡ vol: **{vol}** ({pc_str})",
+        f"🕒 age: **{age}**",
+    ]
+    return _compose_row(rank, sym, addr, metrics)
 
 
 def _format_row_sm(rank: int, t: dict[str, Any]) -> str:
@@ -119,29 +124,43 @@ def _format_row_sm(rank: int, t: dict[str, Any]) -> str:
     addr = t.get("token_address") or ""
     bv = _fmt_usd(t.get("buy_volume"))
     mcap = _fmt_usd(t.get("market_cap_usd"))
-    parts = [f"SM buy {bv}"]
     nb = _trader_count(t)
+
+    metrics = [f"💵 SM buy: **{bv}**"]
     if nb is not None:
-        parts.append(f"{nb} traders")
-    parts.append(f"mcap {mcap}")
-    line1 = f"**{rank}. ${sym}** — " + " | ".join(parts)
-    return f"{line1}\n{_link_line(addr, sym)}"
+        metrics.append(f"👥 traders: **{nb}**")
+    metrics.append(f"🪙 mcap: **{mcap}**")
+    return _compose_row(rank, sym, addr, metrics)
 
 
 def _format_row_danger(rank: int, t: dict[str, Any]) -> str:
     sym = (t.get("token_symbol") or "?").upper()
     addr = t.get("token_address") or ""
-    age = _fmt_days(t.get("token_age_days"))
+    age = _fmt_age_value(t.get("token_age_days"))
     ratio = t.get("inflow_fdv_ratio")
     ratio_str = f"{ratio:.2f}x" if isinstance(ratio, (int, float)) else "?"
     fdv = _fmt_usd(t.get("fdv"))
-    parts = [age, f"inflow/FDV {ratio_str}"]
     nb = _trader_count(t)
+
+    metrics = [
+        f"🕒 age: **{age}**",
+        f"💧 inflow/FDV: **{ratio_str}**",
+        f"💎 fdv: **{fdv}**",
+    ]
     if nb is not None:
-        parts.append(f"{nb} traders")
-    parts.append(f"fdv {fdv}")
-    line1 = f"**{rank}. ${sym}** — " + " | ".join(parts)
-    return f"{line1}\n{_link_line(addr, sym)}"
+        metrics.append(f"👥 traders: **{nb}**")
+    return _compose_row(rank, sym, addr, metrics)
+
+
+def _compose_row(rank: int, sym: str, addr: str, metrics: list[str]) -> str:
+    if metrics:
+        header = f"**{rank}. ${sym}**　{metrics[0]}"
+        rest = metrics[1:]
+    else:
+        header = f"**{rank}. ${sym}**"
+        rest = []
+    parts = [header] + rest + [_link_line(addr, sym)]
+    return "\n".join(parts)
 
 
 def _trader_count(t: dict[str, Any]) -> int | None:
@@ -209,17 +228,17 @@ def _fmt_pct_signed(v: Any) -> str:
     return f"{n:+.2f}%"
 
 
-def _fmt_days(v: Any) -> str:
+def _fmt_age_value(v: Any) -> str:
     if v is None:
-        return "age N/A"
+        return "N/A"
     try:
         n = float(v)
     except (TypeError, ValueError):
-        return "age ?"
+        return "?"
     if n < 1:
-        return f"age {n*24:.0f}h"
+        return f"{n*24:.0f}h"
     if n < 30:
-        return f"age {n:.1f}d"
+        return f"{n:.1f}d"
     if n < 365:
-        return f"age {n/30:.1f}mo"
-    return f"age {n/365:.1f}y"
+        return f"{n/30:.1f}mo"
+    return f"{n/365:.1f}y"
