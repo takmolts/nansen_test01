@@ -112,9 +112,9 @@ def _format_row_momentum(rank: int, t: dict[str, Any]) -> str:
     age = _fmt_age_value(t.get("token_age_days"))
 
     metrics = [
-        f"🪙 mcap: **{mcap}**",
-        f"⚡ vol: **{vol}** ({pc_str})",
-        f"🕒 age: **{age}**",
+        f"🪙 mcap: {mcap}",
+        f"⚡ vol: {vol} ({pc_str})",
+        f"🕒 age: {age}",
     ]
     return _compose_row(rank, sym, addr, metrics)
 
@@ -126,10 +126,10 @@ def _format_row_sm(rank: int, t: dict[str, Any]) -> str:
     mcap = _fmt_usd(t.get("market_cap_usd"))
     nb = _trader_count(t)
 
-    metrics = [f"💵 SM buy: **{bv}**"]
+    metrics = [f"💵 SM buy: {bv}"]
     if nb is not None:
-        metrics.append(f"👥 traders: **{nb}**")
-    metrics.append(f"🪙 mcap: **{mcap}**")
+        metrics.append(f"👥 traders: {nb}")
+    metrics.append(f"🪙 mcap: {mcap}")
     return _compose_row(rank, sym, addr, metrics)
 
 
@@ -143,23 +143,23 @@ def _format_row_danger(rank: int, t: dict[str, Any]) -> str:
     nb = _trader_count(t)
 
     metrics = [
-        f"🕒 age: **{age}**",
-        f"💧 inflow/FDV: **{ratio_str}**",
-        f"💎 fdv: **{fdv}**",
+        f"🕒 age: {age}",
+        f"💧 inflow/FDV: {ratio_str}",
+        f"💎 fdv: {fdv}",
     ]
     if nb is not None:
-        metrics.append(f"👥 traders: **{nb}**")
+        metrics.append(f"👥 traders: {nb}")
     return _compose_row(rank, sym, addr, metrics)
 
 
 def _compose_row(rank: int, sym: str, addr: str, metrics: list[str]) -> str:
-    if metrics:
-        header = f"**{rank}. ${sym}**　{metrics[0]}"
-        rest = metrics[1:]
-    else:
-        header = f"**{rank}. ${sym}**"
-        rest = []
-    parts = [header] + rest + [_link_line(addr, sym)]
+    """ヘッダ (rank + symbol) を 1 行、 metrics を縦並び、 リンクを 3 行で返す。
+
+    太字 (`**`) は使わない。 絵文字混じり symbol だと markdown レンダリングが
+    崩れるため。
+    """
+    header = f"{rank}. ${sym}"
+    parts = [header] + metrics + [_link_line(addr, sym)]
     return "\n".join(parts)
 
 
