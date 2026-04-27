@@ -12,7 +12,9 @@ from discord.ext import commands
 from bot import embeds
 from bot.config import RESPONSE_MODE_INLINE, RESPONSE_MODE_THREAD, Config
 from bot.nansen_client import NansenAPIError, NansenClient
-from bot.views import DeleteResultView
+from bot.scoring import engine as scoring_engine
+from bot.scoring.types import TotalScore
+from bot.views import ResultView
 
 logger = logging.getLogger(__name__)
 
@@ -99,10 +101,12 @@ class _AnalysisResult:
         embed_list: list[discord.Embed],
         credits_used: int,
         symbol: str,
+        scores: TotalScore | None,
     ):
         self.embed_list = embed_list
         self.credits_used = credits_used
         self.symbol = symbol
+        self.scores = scores
 
 
 async def _run_analysis(*, api_key: str, base_url: str, token_address: str) -> _AnalysisResult:
@@ -162,7 +166,21 @@ async def _run_analysis(*, api_key: str, base_url: str, token_address: str) -> _
     symbol = _extract_symbol(token_info_r)
     total_holders = _extract_total_holders(token_info_r)
 
+    holder_pcts_desc = sorted(
+        [embeds.holder_pct(h) or 0.0 for h in holders_list],
+        reverse=True,
+    )
+    scores = scoring_engine.calculate_scores(
+        token_info=None if isinstance(token_info_r, BaseException) else token_info_r,
+        sm_data=None if isinstance(sm_r, BaseException) else sm_r,
+        holder_pcts_desc=holder_pcts_desc,
+        total_holders=total_holders,
+        whales=whales_sorted,
+        clusters=clusters,
+    )
+
     embed_list: list[discord.Embed] = []
+    embed_list.append(embeds.build_summary_embed(scores, symbol))
     embed_list.append(
         embeds.build_token_info_embed(
             None if isinstance(token_info_r, BaseException) else token_info_r,
@@ -191,7 +209,7 @@ async def _run_analysis(*, api_key: str, base_url: str, token_address: str) -> _
         )
     )
 
-    return _AnalysisResult(embed_list, credits_used, symbol)
+    return _AnalysisResult(embed_list, credits_used, symbol, scores)
 
 
 def _extract_symbol(token_info: Any) -> str:
@@ -240,7 +258,7 @@ async def _post_result(
     owner_id = interaction.user.id
 
     if response_mode != RESPONSE_MODE_THREAD:
-        view = DeleteResultView(owner_id=owner_id)
+        view = ResultView(owner_id=owner_id, scores=result.scores)
         await interaction.followup.send(embeds=result.embed_list, view=view)
         return
 
@@ -250,7 +268,7 @@ async def _post_result(
             "スレッド作成不可なチャンネル種別 (%s) → inline 投稿に fallback",
             type(channel).__name__,
         )
-        view = DeleteResultView(owner_id=owner_id)
+        view = ResultView(owner_id=owner_id, scores=result.scores)
         await interaction.followup.send(embeds=result.embed_list, view=view)
         return
 
@@ -263,7 +281,11 @@ async def _post_result(
         try:
             if existing.archived:
                 await existing.edit(archived=False)
-            view = DeleteResultView(owner_id=owner_id, target_thread=existing)
+            view = ResultView(
+                owner_id=owner_id,
+                target_thread=existing,
+                scores=result.scores,
+            )
             await existing.send(embeds=result.embed_list, view=view)
             await interaction.followup.send(
                 content=f"📊 既存スレッド {existing.mention} に追記しました",
@@ -282,10 +304,11 @@ async def _post_result(
         # WebhookMessage には guild 情報が付かないため Message に取り直す
         anchor = await channel.fetch_message(anchor_webhook.id)
         thread = await anchor.create_thread(name=thread_name)
-        view = DeleteResultView(
+        view = ResultView(
             owner_id=owner_id,
             target_thread=thread,
             target_anchor=anchor,
+            scores=result.scores,
         )
         await thread.send(embeds=result.embed_list, view=view)
     except discord.Forbidden:
@@ -296,7 +319,7 @@ async def _post_result(
         )
     except Exception:
         logger.exception("スレッド投稿失敗 → inline に fallback")
-        view = DeleteResultView(owner_id=owner_id)
+        view = ResultView(owner_id=owner_id, scores=result.scores)
         await interaction.followup.send(embeds=result.embed_list, view=view)
 
 

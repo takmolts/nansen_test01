@@ -2,18 +2,23 @@
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING
 
 import discord
+
+if TYPE_CHECKING:
+    from bot.scoring.types import TotalScore
 
 logger = logging.getLogger(__name__)
 
 
-class DeleteResultView(discord.ui.View):
-    """結果メッセージ/スレッドを削除する 🗑 ボタン付き View。
+class ResultView(discord.ui.View):
+    """結果メッセージにスコア根拠表示と削除ボタンを付ける View。
 
-    - inline モード時: ボタンが付いた Embed メッセージそのものを削除
-    - thread モード時: スレッド全体の削除を試み、駄目なら bot の投稿だけ削除
-    - 操作可能なのはコマンド実行者 + Manage Messages 権限保持者
+    - ヘルプ (📖 スコア根拠): 誰でも押せる、ephemeral で計算根拠を表示
+    - 削除 (🗑️): コマンド実行者 + Manage Messages 権限保持者のみ
+        - thread モード: スレッド削除を試み、駄目なら bot 投稿だけ削除
+        - inline モード: ボタンが付いたメッセージそのものを削除
     """
 
     def __init__(
@@ -22,35 +27,83 @@ class DeleteResultView(discord.ui.View):
         owner_id: int,
         target_thread: discord.Thread | None = None,
         target_anchor: discord.Message | None = None,
+        scores: "TotalScore | None" = None,
     ):
         super().__init__(timeout=None)
         self.owner_id = owner_id
         self.target_thread = target_thread
         self.target_anchor = target_anchor
+        self.scores = scores
+        if scores is None:
+            # スコアが無い時はヘルプボタンを除去
+            self.remove_item(self.help_button)
 
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id == self.owner_id:
-            return True
-        perms = (
-            interaction.channel.permissions_for(interaction.user)
-            if hasattr(interaction.channel, "permissions_for")
-            else None
-        )
-        if perms is not None and perms.manage_messages:
-            return True
-        await interaction.response.send_message(
-            "削除はコマンド実行者のみ可能です。", ephemeral=True
-        )
-        return False
+    # ----- ヘルプ -----
+    @discord.ui.button(label="📖 スコア根拠", style=discord.ButtonStyle.secondary)
+    async def help_button(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+        embed = self._build_help_embed()
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
+    def _build_help_embed(self) -> discord.Embed:
+        s = self.scores
+        embed = discord.Embed(
+            title="📖 スコア計算の根拠",
+            color=0x4B9CD3,
+        )
+        if s is None:
+            embed.description = "スコア情報がありません。"
+            return embed
+
+        embed.description = (
+            f"**Total: {s.total:.1f} / 100  {s.band_emoji} {s.band}**\n"
+            "各カテゴリ 0..100 点に正規化したのち、設計書の重みを 5 カテゴリで再配分して合算。"
+        )
+
+        for c in s.categories:
+            value = _format_breakdown(c.name, c.breakdown, c.note)
+            embed.add_field(
+                name=f"{c.emoji} {c.name}: {c.score:.1f} / 100  (重み {c.weight*100:.1f}%)",
+                value=value or "-",
+                inline=False,
+            )
+
+        embed.add_field(
+            name="判定バンド",
+            value=(
+                "🟢🟢 80+: STRONG BUY\n"
+                "🟢 60-79: BUY\n"
+                "🟡 40-59: CAUTION\n"
+                "🔴 0-39: AVOID"
+            ),
+            inline=False,
+        )
+        embed.set_footer(
+            text=(
+                "フェーズA: 5カテゴリ暫定算出。 "
+                "Risk / Deployer Trust / Narrative は別 API 連携待ち"
+            )
+        )
+        return embed
+
+    # ----- 削除 -----
     @discord.ui.button(label="🗑️ 削除", style=discord.ButtonStyle.danger)
     async def delete_button(
         self,
         interaction: discord.Interaction,
         button: discord.ui.Button,
     ) -> None:
+        if not self._can_delete(interaction):
+            await interaction.response.send_message(
+                "削除はコマンド実行者のみ可能です。", ephemeral=True
+            )
+            return
+
         if self.target_thread is not None:
-            if await self._try_delete_thread(interaction):
+            if await self._try_delete_thread():
                 return
 
         # inline / fallback: ボタンが付いたメッセージを削除
@@ -66,8 +119,17 @@ class DeleteResultView(discord.ui.View):
             logger.exception("メッセージ削除失敗")
             await self._safe_reply(interaction, "削除に失敗しました。")
 
-    async def _try_delete_thread(self, interaction: discord.Interaction) -> bool:
-        """スレッド削除を試みる。成功時 True。"""
+    def _can_delete(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id == self.owner_id:
+            return True
+        perms = (
+            interaction.channel.permissions_for(interaction.user)
+            if hasattr(interaction.channel, "permissions_for")
+            else None
+        )
+        return perms is not None and perms.manage_messages
+
+    async def _try_delete_thread(self) -> bool:
         try:
             await self.target_thread.delete()
         except discord.Forbidden:
@@ -77,7 +139,6 @@ class DeleteResultView(discord.ui.View):
             logger.exception("スレッド削除失敗 → メッセージ削除に fallback")
             return False
 
-        # スレッドの起点メッセージ(親チャンネル側)も併せて削除
         if self.target_anchor is not None:
             try:
                 await self.target_anchor.delete()
@@ -93,3 +154,106 @@ class DeleteResultView(discord.ui.View):
                 await interaction.response.send_message(text, ephemeral=True)
         except Exception:
             logger.exception("エラー応答送信失敗")
+
+
+# 後方互換のためのエイリアス
+DeleteResultView = ResultView
+
+
+def _format_breakdown(name: str, breakdown: dict, note: str) -> str:
+    if not breakdown:
+        return note or ""
+
+    lines: list[str] = []
+    if name == "Smart Money":
+        bc = breakdown.get("buy_count")
+        ba = breakdown.get("buy_amount_usd")
+        cs = breakdown.get("count_score")
+        as_ = breakdown.get("amount_score")
+        if bc is not None:
+            lines.append(f"・SM 買い件数 7d: {int(bc)}人 → {_fmt(cs)} / 50pt")
+        if ba is not None:
+            lines.append(f"・SM 買い額 7d: {_fmt_usd(ba)} → {_fmt(as_)} / 50pt")
+        lines.append("(簡略: 保有SM数とネットフローは未対応)")
+
+    elif name == "Momentum":
+        bsr = breakdown.get("buy_sell_ratio")
+        br = breakdown.get("buyer_ratio")
+        bs = breakdown.get("bs_score")
+        ber = breakdown.get("buyer_score")
+        if bsr is not None:
+            lines.append(f"・Buy/Sell 比: {bsr:.2f}x → {_fmt(bs)} / 30pt")
+        if br is not None:
+            lines.append(f"・買い手/売り手 比: {br:.2f}x → {_fmt(ber)} / 25pt")
+        lines.append("(簡略: 価格変動・出来高伸長は未対応 → 取得可能 55pt を 100pt 換算)")
+
+    elif name == "Liquidity":
+        liq = breakdown.get("liquidity_usd")
+        vlr = breakdown.get("vol_liq_ratio")
+        mcap = breakdown.get("market_cap_usd")
+        ls = breakdown.get("liq_score")
+        vs = breakdown.get("vlr_score")
+        ms = breakdown.get("mc_score")
+        if liq is not None:
+            lines.append(f"・流動性: {_fmt_usd(liq)} → {_fmt(ls)} / 50pt")
+        if vlr is not None:
+            lines.append(f"・出来高/流動性 比: {vlr:.2f} → {_fmt(vs)} / 30pt")
+        if mcap is not None:
+            lines.append(f"・MCap: {_fmt_usd(mcap)} → {_fmt(ms)} / 20pt")
+
+    elif name == "Distribution":
+        th = breakdown.get("total_holders")
+        top10 = breakdown.get("top10_concentration_pct")
+        ts = breakdown.get("th_score")
+        t10s = breakdown.get("t10_score")
+        if th is not None:
+            lines.append(f"・総ホルダー: {int(th):,} → {_fmt(ts)} / 35pt")
+        if top10 is not None:
+            lines.append(f"・Top10 集中度: {top10:.2f}% → {_fmt(t10s)} / 40pt")
+        lines.append("(簡略: 新規ホルダー増加率は未対応 → 75pt を 100pt 換算)")
+
+    elif name == "Bundle Safety":
+        wc = breakdown.get("whale_count")
+        cc = breakdown.get("cluster_count")
+        mcs = breakdown.get("max_cluster_size")
+        ws = breakdown.get("wc_score")
+        bs = breakdown.get("bd_score")
+        if wc is not None:
+            lines.append(f"・3%超ホルダー数: {wc} → {_fmt(ws)} / 30pt")
+        if mcs is not None:
+            lines.append(f"・最大クラスタサイズ: {mcs} (検出 {cc} 件) → {_fmt(bs)} / 40pt")
+        lines.append("(簡略: 警告ラベル混入・Insider 比は未対応 → 70pt を 100pt 換算)")
+
+    else:
+        for k, v in breakdown.items():
+            lines.append(f"・{k}: {v}")
+
+    if note:
+        lines.append(f"※ {note}")
+    return "\n".join(lines)
+
+
+def _fmt(v) -> str:
+    if v is None:
+        return "?"
+    try:
+        return f"{float(v):.1f}"
+    except (TypeError, ValueError):
+        return str(v)
+
+
+def _fmt_usd(v) -> str:
+    if v is None:
+        return "N/A"
+    try:
+        n = float(v)
+    except (TypeError, ValueError):
+        return str(v)
+    a = abs(n)
+    if a >= 1_000_000_000:
+        return f"${n/1_000_000_000:.2f}B"
+    if a >= 1_000_000:
+        return f"${n/1_000_000:.2f}M"
+    if a >= 1_000:
+        return f"${n/1_000:.2f}K"
+    return f"${n:.2f}"

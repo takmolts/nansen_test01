@@ -8,13 +8,24 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from datetime import datetime, timezone
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import discord
+
+if TYPE_CHECKING:
+    from bot.scoring.types import TotalScore
 
 COLOR_PRIMARY = 0x4B9CD3     # 青系(情報)
 COLOR_WARN = 0xFFD700        # 黄(集中度/バンドル軽度)
 COLOR_DANGER = 0xFF4444      # 赤(バンドル検出あり)
+
+# 総合スコアのバンド色
+COLOR_BAND = {
+    "STRONG BUY": 0x00FF00,
+    "BUY": 0x7FFF00,
+    "CAUTION": 0xFFD700,
+    "AVOID": 0xFF4444,
+}
 
 
 # =========================
@@ -493,6 +504,39 @@ def build_bundle_embed(
 # =========================
 # フッタ付与
 # =========================
+
+def build_summary_embed(scores: "TotalScore", symbol: str) -> discord.Embed:
+    """総合スコア + カテゴリ別スコアの一覧 (フェーズA時点では5カテゴリ)。"""
+    title = f"🎯 ${symbol} Analysis Summary" if symbol else "🎯 Analysis Summary"
+    color = COLOR_BAND.get(scores.band, COLOR_PRIMARY)
+
+    desc_lines = [
+        f"**Total: {scores.total:.1f} / 100  {scores.band_emoji} {scores.band}**",
+        "",
+        "```",
+    ]
+    name_width = max((len(c.name) for c in scores.categories), default=0)
+    for c in scores.categories:
+        bar = _make_bar(c.score)
+        desc_lines.append(
+            f"{c.emoji} {c.name:<{name_width}}  {c.score:5.1f}  {bar}"
+        )
+    desc_lines.append("```")
+    desc_lines.append("\n*フェーズA: 5カテゴリで暫定算出 (Risk / Deployer / Narrative は未実装)*")
+
+    embed = discord.Embed(
+        title=title,
+        description="\n".join(desc_lines),
+        color=color,
+    )
+    return embed
+
+
+def _make_bar(score: float, width: int = 10) -> str:
+    clamped = max(0.0, min(100.0, score))
+    filled = int(clamped / (100 / width))
+    return "█" * filled + "░" * (width - filled)
+
 
 def set_credit_footer(embeds: Iterable[discord.Embed], credits: int) -> None:
     """最後の Embed に「消費クレジット(目安)」をフッタとして付ける。"""
