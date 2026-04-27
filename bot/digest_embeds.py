@@ -20,26 +20,27 @@ def build_digest_embeds(
     sm_resp: Any,
     danger_resp: Any,
     credits_used: int,
+    timeframe: str = "24h",
 ) -> list[discord.Embed]:
     embeds = [
         _build_embed(
-            title="🔥 出来高急増ミーム (24h, age ≤ 30d)",
-            description="出来高 (`volume`) 上位 5 件。 短期で資金が集まっているトークン。",
+            title=f"🔥 出来高急増ミーム ({timeframe}, age ≤ 30d)",
+            description=f"出来高 (`volume`) 上位 5 件。 直近 {timeframe} で資金が集まっているトークン。",
             color=COLOR_MOMENTUM,
             data=_extract_data(momentum_resp),
             row_formatter=_format_row_momentum,
             error=_err_msg(momentum_resp),
         ),
         _build_embed(
-            title="🧠 Smart Money 買い集めランキング (24h)",
-            description="SM の買い額 (`buy_volume`) 上位 5 件。 プロが今買っているトークン。",
+            title=f"🧠 Smart Money 買い集めランキング ({timeframe})",
+            description=f"SM の買い額 (`buy_volume`) 上位 5 件。 直近 {timeframe} でプロが買っているトークン。",
             color=COLOR_SM,
             data=_extract_data(sm_resp),
             row_formatter=_format_row_sm,
             error=_err_msg(sm_resp),
         ),
         _build_embed(
-            title="⚡ 急流入トークン (age ≤ 7d, FDV比 流入大)",
+            title=f"⚡ 急流入トークン ({timeframe}, age ≤ 7d, FDV比 流入大)",
             description=(
                 "新規 7 日以内 × `inflow_fdv_ratio` 上位。 \n"
                 "SM / インサイダー早期流入の可能性、 一方で短期ポンプの典型でもある両刃シグナル。 "
@@ -54,7 +55,7 @@ def build_digest_embeds(
 
     last = embeds[-1]
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    last.set_footer(text=f"消費クレジット: {credits_used}(目安) | 集計: {now}")
+    last.set_footer(text=f"消費クレジット: {credits_used}(目安) | 集計: {now} | timeframe: {timeframe}")
     return embeds
 
 

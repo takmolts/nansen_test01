@@ -22,6 +22,7 @@ class Config:
     helius_api_key: str | None
     enable_helius: bool
     enable_coingecko: bool
+    digest_channel_id: int | None
     allowed_channel_ids: frozenset[int]
     dev_guild_id: int | None
     response_mode: str
@@ -55,6 +56,9 @@ class Config:
         enable_helius = _parse_bool(os.getenv("ENABLE_HELIUS"), default=True)
         enable_coingecko = _parse_bool(os.getenv("ENABLE_COINGECKO"), default=True)
 
+        raw_digest_ch = os.getenv("DIGEST_CHANNEL_ID", "").strip()
+        digest_channel_id = int(raw_digest_ch) if raw_digest_ch else None
+
         raw_channels = os.getenv("ALLOWED_CHANNEL_IDS", "").strip()
         channels: frozenset[int] = frozenset()
         if raw_channels:
@@ -82,6 +86,7 @@ class Config:
             helius_api_key=helius_key,
             enable_helius=enable_helius,
             enable_coingecko=enable_coingecko,
+            digest_channel_id=digest_channel_id,
             allowed_channel_ids=channels,
             dev_guild_id=dev_guild_id,
             response_mode=raw_mode,
