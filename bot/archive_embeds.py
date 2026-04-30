@@ -11,7 +11,7 @@ from typing import Any
 
 import discord
 
-from bot.links import trade_links_md, x_search_links_md
+from bot.links import grok_token_link_md, trade_links_md, x_search_links_md
 
 COLOR_MOMENTUM = 0xFF8C00
 COLOR_SM = 0x4B9CD3
@@ -101,9 +101,13 @@ def build_archive_embed(
         lines.append(f"💧 inflow/FDV ({timeframe}): {inflow_ratio:.2f}x")
 
     lines.append(f"💬 CA: `{addr}`")
-    x_md = x_search_links_md(sym if sym and sym != "?" else None, addr)
+    sym_for_link = sym if sym and sym != "?" else None
+    x_md = x_search_links_md(sym_for_link, addr)
     if x_md:
         lines.append(f"🐦 X Search: {x_md}")
+    grok_md = grok_token_link_md(sym_for_link, addr)
+    if grok_md:
+        lines.append(f"🤖 Grok: {grok_md}")
     lines.append(f"🔗 Trade: {trade_links_md(addr, chain=chain)}")
 
     embed.description = "\n".join(lines)

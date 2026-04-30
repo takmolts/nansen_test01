@@ -56,6 +56,24 @@ def x_search_url(query: str) -> str:
     return f"https://x.com/search?q={encoded}&src=typed_query&f=live"
 
 
+def grok_url(query: str) -> str:
+    """Grok web 版にクエリを渡す URL。 ブラウザで開けば Grok チャットが起動する。"""
+    encoded = urllib.parse.quote(query)
+    return f"https://grok.com/?q={encoded}"
+
+
+def grok_token_link_md(symbol: str | None, address: str) -> str:
+    """`[Grok で調べる](url)` の md。 query は ticker + CA + ナラティブ質問。"""
+    parts: list[str] = []
+    if symbol:
+        parts.append(f"${symbol}")
+    if address:
+        parts.append(f"(CA: {address})")
+    parts.append("のナラティブと最新動向を教えて")
+    q = " ".join(parts)
+    return f"[Grok で調べる]({grok_url(q)})"
+
+
 def x_search_links_md(symbol: str | None, address: str | None) -> str:
     """`[CA](...) · [$SYMBOL](...)` の md。 取れた要素のみ。"""
     parts: list[str] = []

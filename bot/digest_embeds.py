@@ -13,7 +13,7 @@ from typing import Any, Callable
 
 import discord
 
-from bot.links import trade_links_md, x_search_links_md
+from bot.links import grok_token_link_md, trade_links_md, x_search_links_md
 
 COLOR_MOMENTUM = 0xFF8C00
 COLOR_SM = 0x4B9CD3
@@ -185,9 +185,12 @@ def _link_block(addr: str, symbol: str | None = None) -> str:
     sym = symbol if symbol and symbol != "?" else None
     trade = trade_links_md(addr, chain="solana")
     x = x_search_links_md(sym, addr)
+    grok = grok_token_link_md(sym, addr)
     lines = [f"💬 CA: `{addr}`"]
     if x:
         lines.append(f"🐦 X Search: {x}")
+    if grok:
+        lines.append(f"🤖 Grok: {grok}")
     lines.append(f"🔗 Trade: {trade}")
     return "\n".join(lines)
 
