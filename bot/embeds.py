@@ -536,6 +536,20 @@ def build_bundle_embed(
 # フッタ付与
 # =========================
 
+def build_llm_summary_embed(text: str) -> discord.Embed:
+    """ローカル LLM の総括コメントを 1 つの Embed に詰めて返す。"""
+    body = (text or "").strip() or "(LLM 応答なし)"
+    if len(body) > 4000:
+        body = body[:3990] + "…"
+    embed = discord.Embed(
+        title="💬 AI 総括コメント (参考)",
+        description=body,
+        color=0x808080,
+    )
+    embed.set_footer(text="生成AIによる自動コメント。 投資判断ではなく観察コメント")
+    return embed
+
+
 def build_summary_embed(scores: "TotalScore", symbol: str) -> discord.Embed:
     """総合スコア + カテゴリ別スコアの一覧 (フェーズA時点では5カテゴリ)。"""
     title = f"🎯 ${symbol} Analysis Summary" if symbol else "🎯 Analysis Summary"

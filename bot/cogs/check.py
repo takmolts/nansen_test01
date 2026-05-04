@@ -10,6 +10,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from bot import embeds
+from bot import llm_client
 from bot.coingecko_client import CoinGeckoClient
 from bot.config import RESPONSE_MODE_INLINE, RESPONSE_MODE_THREAD, Config
 from bot.dexscreener_client import DexScreenerClient
@@ -256,6 +257,21 @@ async def _run_analysis(
         )
     )
 
+    # ローカル LLM の総括コメント (有効時のみ)
+    if llm_client.is_enabled():
+        try:
+            sys_p, user_p = _build_llm_prompt(
+                scores=scores,
+                token_info=token_info_r,
+                symbol=symbol,
+                token_address=token_address,
+            )
+            comment = await llm_client.chat(sys_p, user_p)
+            if comment.strip():
+                embed_list.append(embeds.build_llm_summary_embed(comment))
+        except Exception:
+            logger.exception("総括コメント生成失敗")
+
     return _AnalysisResult(embed_list, credits_used, symbol, scores)
 
 
@@ -430,6 +446,123 @@ async def _find_existing_thread(
     except Exception:
         logger.exception("アーカイブスレッド検索で例外")
     return None
+
+
+_LLM_SYS_PROMPT = (
+    "あなたは Solana ミームコインのオンチェーン分析アシスタント。\n"
+    "渡されたデータをもとに、 日本語で 5〜7 行の総括コメントを書け。\n"
+    "ルール:\n"
+    "- 「結論」「注目点」「注意点」 の 3 セクションで箇条書き\n"
+    "- 投資判断ではなく観察コメント。 「買い推奨」 等の表現は禁止\n"
+    "- 数値は短く、 重要な要素のみ\n"
+    "- 前置き・後書き・自己紹介・メタ発言禁止"
+)
+
+
+def _build_llm_prompt(
+    *,
+    scores: TotalScore,
+    token_info: Any,
+    symbol: str,
+    token_address: str,
+) -> tuple[str, str]:
+    """system / user prompt を返す。 user prompt は ~1500 文字以内に抑える。"""
+    info_data: Any = token_info.get("data") if isinstance(token_info, dict) else None
+    if not isinstance(info_data, dict):
+        info_data = token_info if isinstance(token_info, dict) else {}
+    td = info_data.get("token_details") if isinstance(info_data.get("token_details"), dict) else {}
+    spot = info_data.get("spot_metrics") if isinstance(info_data.get("spot_metrics"), dict) else {}
+
+    name = info_data.get("name") or ""
+    mcap_s = _short_usd(td.get("market_cap_usd"))
+    liq_s = _short_usd(spot.get("liquidity_usd"))
+    vol_s = _short_usd(spot.get("volume_total_usd"))
+    holders = spot.get("total_holders")
+
+    cats_lines: list[str] = []
+    for c in scores.categories:
+        kf = _llm_key_facts(c.name, c.breakdown or {})
+        if kf:
+            cats_lines.append(f"- {c.name}: {c.score:.0f}/100 ({kf})")
+        else:
+            cats_lines.append(f"- {c.name}: {c.score:.0f}/100")
+
+    user_prompt = (
+        f"銘柄: ${symbol} {name}\n"
+        f"CA: {token_address}\n"
+        f"MCap: {mcap_s} / Liq: {liq_s} / Vol24h: {vol_s} / Holders: {holders}\n\n"
+        f"総合スコア: {scores.total:.1f}/100 ({scores.band})\n"
+        + "\n".join(cats_lines)
+        + "\n\nこれらをもとに総括コメントを作成。"
+    )
+    return _LLM_SYS_PROMPT, user_prompt
+
+
+def _llm_key_facts(name: str, bd: dict) -> str:
+    parts: list[str] = []
+    if name == "Smart Money":
+        sh = bd.get("sm_holder_count")
+        nf = bd.get("smart_trader_net_flow_usd")
+        nb = bd.get("new_buyers_count")
+        if sh is not None:
+            parts.append(f"SM保有={sh}")
+        if isinstance(nf, (int, float)):
+            parts.append(f"netflow={int(nf)}USD")
+        if nb is not None:
+            parts.append(f"新規={nb}")
+    elif name == "Momentum":
+        bsr = bd.get("buy_sell_ratio")
+        if isinstance(bsr, (int, float)):
+            parts.append(f"BS比={bsr:.2f}x")
+    elif name == "Distribution":
+        top10 = bd.get("top10_concentration_pct")
+        if isinstance(top10, (int, float)):
+            parts.append(f"Top10={top10:.1f}%")
+        ng = bd.get("holder_growth_24h_ratio")
+        if isinstance(ng, (int, float)):
+            parts.append(f"24h増={ng*100:.2f}%")
+    elif name == "Bundle Safety":
+        wc = bd.get("whale_count")
+        mcs = bd.get("max_cluster_size")
+        if wc is not None:
+            parts.append(f"whale={wc}")
+        if mcs is not None:
+            parts.append(f"max_cluster={mcs}")
+    elif name == "Risk":
+        btc = bd.get("btc_signal")
+        cex = bd.get("cex_inflow_ratio")
+        ad = bd.get("age_days")
+        if btc:
+            parts.append(f"BTC連動={btc}")
+        if isinstance(cex, (int, float)):
+            parts.append(f"CEX流入={cex*100:.1f}%")
+        if ad is not None:
+            parts.append(f"年齢={ad}d")
+    elif name == "Narrative":
+        status = bd.get("status")
+        n = bd.get("similar_recent_count")
+        if status:
+            parts.append(f"status={status}")
+        if n is not None:
+            parts.append(f"類似={n}件")
+    return ", ".join(parts)
+
+
+def _short_usd(v) -> str:
+    if v is None:
+        return "?"
+    try:
+        n = float(v)
+    except (TypeError, ValueError):
+        return "?"
+    a = abs(n)
+    if a >= 1_000_000_000:
+        return f"${n/1_000_000_000:.2f}B"
+    if a >= 1_000_000:
+        return f"${n/1_000_000:.2f}M"
+    if a >= 1_000:
+        return f"${n/1_000:.2f}K"
+    return f"${n:.2f}"
 
 
 async def setup(bot: commands.Bot) -> None:
