@@ -52,19 +52,29 @@ class DigestCog(commands.Cog):
     def __init__(self, bot: commands.Bot, config: Config):
         self.bot = bot
         self.config = config
-        if config.digest_channel_id:
+        if not config.digest_channel_id:
+            logger.info("DIGEST_CHANNEL_ID 未設定 → digest 自動投稿は無効")
+            return
+
+        # 個別 ON/OFF。 デフォは両方 OFF (手動 /digest のみ)。
+        # 復活させたい場合は .env で DIGEST_AUTO_4H_ENABLED=true / DIGEST_AUTO_DAILY_ENABLED=true。
+        if config.digest_auto_4h_enabled:
             self.auto_4h_digest.start()
-            self.auto_daily_digest.start()
-            logger.info(
-                "Digest auto-loop 起動: 4h=%s, daily=%s, channel=%s",
-                TF_AUTO_4H, TF_AUTO_DAILY, config.digest_channel_id,
-            )
+            logger.info("digest auto 4h-loop 起動 (timeframe=%s)", TF_AUTO_4H)
         else:
-            logger.info("DIGEST_CHANNEL_ID 未設定 → 自動投稿は無効")
+            logger.info("digest auto 4h-loop は DISABLED (DIGEST_AUTO_4H_ENABLED=false)")
+
+        if config.digest_auto_daily_enabled:
+            self.auto_daily_digest.start()
+            logger.info("digest auto daily-loop 起動 (timeframe=%s)", TF_AUTO_DAILY)
+        else:
+            logger.info("digest auto daily-loop は DISABLED (DIGEST_AUTO_DAILY_ENABLED=false)")
 
     def cog_unload(self) -> None:
-        self.auto_4h_digest.cancel()
-        self.auto_daily_digest.cancel()
+        if self.auto_4h_digest.is_running():
+            self.auto_4h_digest.cancel()
+        if self.auto_daily_digest.is_running():
+            self.auto_daily_digest.cancel()
 
     @app_commands.command(
         name="digest",

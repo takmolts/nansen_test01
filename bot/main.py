@@ -51,6 +51,7 @@ async def _run() -> None:
 
     await bot.load_extension("bot.cogs.check")
     await bot.load_extension("bot.cogs.digest")
+    await bot.load_extension("bot.cogs.sm_roster")
     await bot.start(config.discord_bot_token)
 
 

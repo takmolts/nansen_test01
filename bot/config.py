@@ -24,6 +24,17 @@ class Config:
     enable_coingecko: bool
     digest_channel_id: int | None
     digest_archive_thread_id: int | None
+    digest_auto_4h_enabled: bool
+    digest_auto_daily_enabled: bool
+    sm_roster_auto_enabled: bool
+    sm_roster_fetch_time_jst: str
+    sm_roster_notify_channel_id: int | None
+    sm_roster_max_wallets: int
+    helius_webhook_url: str | None
+    helius_webhook_type: str
+    helius_webhook_transaction_types: tuple[str, ...]
+    helius_webhook_auth_header: str | None
+    helius_webhook_auto_sync: bool
     allowed_channel_ids: frozenset[int]
     dev_guild_id: int | None
     response_mode: str
@@ -63,6 +74,45 @@ class Config:
         raw_archive_thread = os.getenv("DIGEST_ARCHIVE_THREAD_ID", "").strip()
         digest_archive_thread_id = int(raw_archive_thread) if raw_archive_thread else None
 
+        # digest 自動投稿の個別 ON/OFF。 デフォは両方 OFF (手動 /digest のみ)。
+        digest_auto_4h_enabled = _parse_bool(os.getenv("DIGEST_AUTO_4H_ENABLED"), default=False)
+        digest_auto_daily_enabled = _parse_bool(
+            os.getenv("DIGEST_AUTO_DAILY_ENABLED"), default=False
+        )
+
+        # SM roster の自動取得 (1 日 1 回、 JST 指定時刻)。
+        sm_roster_auto_enabled = _parse_bool(os.getenv("SM_ROSTER_AUTO_ENABLED"), default=True)
+        sm_roster_fetch_time_jst = os.getenv("SM_ROSTER_FETCH_TIME_JST", "00:30").strip() or "00:30"
+        raw_roster_notify = os.getenv("SM_ROSTER_NOTIFY_CHANNEL_ID", "").strip()
+        sm_roster_notify_channel_id = int(raw_roster_notify) if raw_roster_notify else None
+
+        # roster の保持上限 (last_seen 古い順に超過分を prune)。 0 以下で無制限。
+        raw_max = os.getenv("SM_ROSTER_MAX_WALLETS", "500").strip()
+        try:
+            sm_roster_max_wallets = int(raw_max) if raw_max else 500
+        except ValueError:
+            raise RuntimeError(
+                f"SM_ROSTER_MAX_WALLETS は整数で指定してください (現在: {raw_max!r})"
+            )
+
+        # Helius webhook (sm_roster と Helius を繋ぐ送信先設定)。
+        helius_webhook_url = (os.getenv("HELIUS_WEBHOOK_URL", "").strip() or None)
+        helius_webhook_type = (
+            os.getenv("HELIUS_WEBHOOK_TYPE", "enhanced").strip().lower() or "enhanced"
+        )
+        if helius_webhook_type not in ("enhanced", "raw"):
+            raise RuntimeError(
+                f"HELIUS_WEBHOOK_TYPE は 'enhanced' / 'raw' のいずれか (現在: {helius_webhook_type!r})"
+            )
+        raw_tx_types = os.getenv("HELIUS_WEBHOOK_TRANSACTION_TYPES", "SWAP").strip()
+        helius_webhook_transaction_types = tuple(
+            x.strip().upper() for x in raw_tx_types.split(",") if x.strip()
+        ) or ("SWAP",)
+        helius_webhook_auth_header = os.getenv("HELIUS_WEBHOOK_AUTH_HEADER", "").strip() or None
+        helius_webhook_auto_sync = _parse_bool(
+            os.getenv("HELIUS_WEBHOOK_AUTO_SYNC"), default=False
+        )
+
         raw_channels = os.getenv("ALLOWED_CHANNEL_IDS", "").strip()
         channels: frozenset[int] = frozenset()
         if raw_channels:
@@ -92,6 +142,17 @@ class Config:
             enable_coingecko=enable_coingecko,
             digest_channel_id=digest_channel_id,
             digest_archive_thread_id=digest_archive_thread_id,
+            digest_auto_4h_enabled=digest_auto_4h_enabled,
+            digest_auto_daily_enabled=digest_auto_daily_enabled,
+            sm_roster_auto_enabled=sm_roster_auto_enabled,
+            sm_roster_fetch_time_jst=sm_roster_fetch_time_jst,
+            sm_roster_notify_channel_id=sm_roster_notify_channel_id,
+            sm_roster_max_wallets=sm_roster_max_wallets,
+            helius_webhook_url=helius_webhook_url,
+            helius_webhook_type=helius_webhook_type,
+            helius_webhook_transaction_types=helius_webhook_transaction_types,
+            helius_webhook_auth_header=helius_webhook_auth_header,
+            helius_webhook_auto_sync=helius_webhook_auto_sync,
             allowed_channel_ids=channels,
             dev_guild_id=dev_guild_id,
             response_mode=raw_mode,

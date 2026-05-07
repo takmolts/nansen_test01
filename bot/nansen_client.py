@@ -34,6 +34,9 @@ CREDIT_COST: dict[str, int] = {
     "flows": 1,
     "token_screener": 1,
     "pnl_leaderboard": 1,
+    # Smart Money 系。 docs にコスト明記なし。 holdings 系 (5) と同等と仮置き、
+    # 実測でズレたらここを更新する。
+    "smart_money_dex_trades": 5,
 }
 
 API_PREFIX = "/api/v1"
@@ -263,6 +266,50 @@ class NansenClient:
                 "pagination": {"page": 1, "per_page": limit},
             },
             credit_key="token_screener",
+        )
+
+    # --- Smart Money ---
+
+    async def smart_money_dex_trades(
+        self,
+        *,
+        chains: list[str] | None = None,
+        include_labels: list[str] | None = None,
+        exclude_labels: list[str] | None = None,
+        page: int = 1,
+        per_page: int = 100,
+        order_field: str = "block_timestamp",
+        order_direction: str = "DESC",
+        premium_labels: bool = False,
+        extra_filters: dict[str, Any] | None = None,
+    ) -> Any:
+        """Smart Money の DEX 売買履歴 (path は /api/v1/smart-money/dex-trades)。
+
+        日付範囲は API 側で「直近 24h」固定。 1 call で per_page 最大 1000 件。
+        ラベル種別 (Fund / Smart Trader / 30D / 90D / 180D Smart Trader /
+        Smart HL Perps Trader) で include/exclude フィルタ可。
+        """
+        filters: dict[str, Any] = {}
+        if include_labels:
+            filters["include_smart_money_labels"] = list(include_labels)
+        if exclude_labels:
+            filters["exclude_smart_money_labels"] = list(exclude_labels)
+        if extra_filters:
+            filters.update(extra_filters)
+
+        body: dict[str, Any] = {
+            "chains": list(chains) if chains else [self._chain],
+            "filters": filters,
+            "pagination": {"page": page, "per_page": per_page},
+            "order_by": [
+                {"field": order_field, "direction": order_direction},
+            ],
+            "premium_labels": premium_labels,
+        }
+        return await self._post(
+            "/smart-money/dex-trades",
+            body,
+            credit_key="smart_money_dex_trades",
         )
 
     async def flow_intelligence(
