@@ -29,12 +29,14 @@ import discord
 from discord.ext import commands
 
 from bot.config import Config
+from bot.links import trade_links_md
 from bot.sm_signal_classifier import (
     STABLE_LABELS,
     classify_swap,
     collect_involved_wallets,
     wallet_net_by_mint,
 )
+from bot.token_info import TokenInfo, get_token_info
 from bot.wallet_db import WalletDB
 
 logger = logging.getLogger(__name__)
@@ -371,12 +373,23 @@ class SmSignalCog(commands.Cog):
             )
             return
 
+        # 投稿前に DexScreener から symbol / mcap を取得 (TTL cache 付き)
+        token_info: TokenInfo | None = None
+        try:
+            token_info = await get_token_info(cls["target_mint"])
+        except Exception:
+            logger.warning(
+                "[sm_signal] token_info 取得失敗 mint=%s",
+                cls["target_mint"], exc_info=True,
+            )
+
         embed = _build_signal_embed(
             event=event,
             wallet=wallet,
             cls=cls,
             others=others,
             is_large=is_large,
+            token_info=token_info,
         )
         try:
             await thread.send(embed=embed)
@@ -408,6 +421,16 @@ def _fmt_amount(v: float) -> str:
     return f"{v:.6f}"
 
 
+def _fmt_usd(v: float) -> str:
+    a = abs(v)
+    sign = "-" if v < 0 else ""
+    if a >= 1_000_000:
+        return f"{sign}${a/1_000_000:.2f}M"
+    if a >= 1_000:
+        return f"{sign}${a/1_000:.2f}K"
+    return f"{sign}${a:.0f}"
+
+
 def _build_signal_embed(
     *,
     event: dict[str, Any],
@@ -415,6 +438,7 @@ def _build_signal_embed(
     cls: dict[str, Any],
     others: set[str],
     is_large: bool,
+    token_info: TokenInfo | None = None,
 ) -> discord.Embed:
     direction = cls["direction"]
     target_mint = cls["target_mint"]
@@ -434,17 +458,22 @@ def _build_signal_embed(
         labels.append(f"🤝 群衆×{len(others)}")
     label_str = " ".join(labels)
 
-    title = f"{label_str} {_short(wallet)}"
+    sym = token_info.symbol if token_info and token_info.symbol else None
+    title_token = f"${sym}" if sym else _short(target_mint)
+    title = f"{label_str} {title_token}  ({_short(wallet)})"
     embed = discord.Embed(title=title, color=color)
+    if token_info and token_info.image_url:
+        embed.set_thumbnail(url=token_info.image_url)
 
+    token_label = f"${sym}" if sym else "token"
     if is_buy:
         flow_text = (
             f"**{_fmt_amount(abs(quote_change))} {quote_label}** → "
-            f"**{_fmt_amount(abs(target_change))} token**"
+            f"**{_fmt_amount(abs(target_change))} {token_label}**"
         )
     else:
         flow_text = (
-            f"**{_fmt_amount(abs(target_change))} token** → "
+            f"**{_fmt_amount(abs(target_change))} {token_label}** → "
             f"**{_fmt_amount(abs(quote_change))} {quote_label}**"
         )
     embed.add_field(name="💱 取引", value=flow_text, inline=False)
@@ -457,11 +486,13 @@ def _build_signal_embed(
         inline=False,
     )
 
-    dexscreener = f"https://dexscreener.com/solana/{target_mint}"
-    solscan_token = f"https://solscan.io/token/{target_mint}"
+    token_lines = [f"`{target_mint}`"]
+    if token_info and token_info.market_cap:
+        token_lines.append(f"📈 mcap: {_fmt_usd(token_info.market_cap)}")
+    token_lines.append(trade_links_md(target_mint, chain="solana"))
     embed.add_field(
-        name="🪙 token",
-        value=f"`{_short(target_mint)}` · [DexScreener]({dexscreener}) · [solscan]({solscan_token})",
+        name=f"🪙 {sym}" if sym else "🪙 token",
+        value="\n".join(token_lines),
         inline=False,
     )
 

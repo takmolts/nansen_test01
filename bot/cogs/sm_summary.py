@@ -31,7 +31,8 @@ from discord import app_commands
 from discord.ext import commands
 
 from bot.config import Config
-from bot.dexscreener_client import DexScreenerClient
+from bot.links import trade_links_md
+from bot.token_info import get_token_infos
 from bot.wallet_db import WalletDB
 
 logger = logging.getLogger(__name__)
@@ -187,39 +188,29 @@ class SmSummaryCog(commands.Cog):
             }
 
     async def _enrich_with_dexscreener(self, rows: list[dict]) -> None:
+        """共有 token_info キャッシュ経由で symbol / mcap / price を補完。"""
         if not rows:
             return
         try:
-            async with DexScreenerClient() as ds:
-                async def _one(r: dict) -> None:
-                    addr = r.get("target_mint")
-                    if not isinstance(addr, str):
-                        return
-                    try:
-                        data = await ds.get_token_data(addr)
-                    except Exception:
-                        logger.warning("DexScreener fetch 失敗 addr=%s", addr, exc_info=True)
-                        return
-                    if not isinstance(data, dict):
-                        return
-                    base = data.get("baseToken") if isinstance(data.get("baseToken"), dict) else None
-                    if isinstance(base, dict):
-                        sym = base.get("symbol")
-                        if isinstance(sym, str):
-                            r["dex_symbol"] = sym
-                    mcap = data.get("marketCap") or data.get("fdv")
-                    if isinstance(mcap, (int, float)):
-                        r["dex_marketcap"] = float(mcap)
-                    price = data.get("priceUsd")
-                    if isinstance(price, (str, int, float)):
-                        try:
-                            r["dex_price_usd"] = float(price)
-                        except (TypeError, ValueError):
-                            pass
-
-                await asyncio.gather(*(_one(r) for r in rows))
+            addrs = [r.get("target_mint") for r in rows if isinstance(r.get("target_mint"), str)]
+            infos = await get_token_infos(addrs)
+            for r in rows:
+                addr = r.get("target_mint")
+                if not isinstance(addr, str):
+                    continue
+                info = infos.get(addr)
+                if info is None:
+                    continue
+                if info.symbol:
+                    r["dex_symbol"] = info.symbol
+                if info.market_cap is not None:
+                    r["dex_marketcap"] = info.market_cap
+                if info.price_usd is not None:
+                    r["dex_price_usd"] = info.price_usd
+                if info.image_url:
+                    r["dex_image_url"] = info.image_url
         except Exception:
-            logger.exception("[sm_summary] DexScreener 補完失敗 (継続)")
+            logger.exception("[sm_summary] token_info 補完失敗 (継続)")
 
     async def _post_summary(
         self, rows: list[dict], *, tag: str, window_min: int
@@ -304,7 +295,7 @@ def _build_summary_embed(
 
     for i, r in enumerate(rows, start=1):
         addr = r.get("target_mint", "")
-        sym = r.get("dex_symbol") or _short(addr)
+        sym = r.get("dex_symbol")
         score = r.get("score", 0)
         n_buyers = r.get("distinct_buyers", 0)
         n_sellers = r.get("distinct_sellers", 0)
@@ -321,7 +312,8 @@ def _build_summary_embed(
         sample = ", ".join(_short(b.get("wallet")) for b in buyers[:5])
         more = f" +{len(buyers)-5}" if len(buyers) > 5 else ""
 
-        head = f"#{i} {sym}  (score {score:.1f})"
+        head_token = f"${sym}" if sym else _short(addr)
+        head = f"#{i} {head_token}  (score {score:.1f})"
 
         value_lines = [
             f"🤝 buyers: **{n_buyers}** / 📊 trades: BUY **{buy_trades}** / SELL {sell_trades}"
@@ -341,10 +333,9 @@ def _build_summary_embed(
                 pass
         value_lines.append(f"👥 buyers: {sample}{more}")
 
-        dex_url = f"https://dexscreener.com/solana/{addr}" if addr else "-"
-        sol_url = f"https://solscan.io/token/{addr}" if addr else "-"
-        value_lines.append(f"🔗 [DexScreener]({dex_url}) · [Solscan]({sol_url})")
-        value_lines.append(f"`{addr}`")
+        if addr:
+            value_lines.append(trade_links_md(addr, chain="solana"))
+            value_lines.append(f"`{addr}`")
 
         embed.add_field(name=head, value="\n".join(value_lines), inline=False)
 
