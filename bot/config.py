@@ -30,6 +30,13 @@ class Config:
     sm_roster_fetch_time_jst: str
     sm_roster_notify_channel_id: int | None
     sm_roster_max_wallets: int
+    sm_roster_chain: str
+    sm_roster_include_labels: tuple[str, ...]
+    sm_roster_exclude_labels: tuple[str, ...]
+    sm_roster_token_age_min: int
+    sm_roster_token_age_max: int
+    sm_roster_trade_value_usd_min: float
+    sm_roster_per_page: int
     helius_webhook_url: str | None
     helius_webhook_type: str
     helius_webhook_transaction_types: tuple[str, ...]
@@ -107,6 +114,47 @@ class Config:
         except ValueError:
             raise RuntimeError(
                 f"SM_ROSTER_MAX_WALLETS は整数で指定してください (現在: {raw_max!r})"
+            )
+
+        # roster の Nansen API filter 条件 (env で変更可)
+        sm_roster_chain = (os.getenv("SM_ROSTER_CHAIN", "solana").strip() or "solana").lower()
+
+        def _csv_env(key: str, default: str) -> tuple[str, ...]:
+            raw = os.getenv(key, default)
+            return tuple(s.strip() for s in raw.split(",") if s.strip())
+
+        sm_roster_include_labels = _csv_env(
+            "SM_ROSTER_INCLUDE_LABELS", "Fund,180D Smart Trader"
+        )
+        sm_roster_exclude_labels = _csv_env(
+            "SM_ROSTER_EXCLUDE_LABELS", "30D Smart Trader"
+        )
+
+        def _required_int(key: str, default: int) -> int:
+            raw = os.getenv(key, "").strip()
+            if not raw:
+                return default
+            try:
+                return int(raw)
+            except ValueError:
+                raise RuntimeError(f"{key} は整数 (現在: {raw!r})")
+
+        def _required_float(key: str, default: float) -> float:
+            raw = os.getenv(key, "").strip()
+            if not raw:
+                return default
+            try:
+                return float(raw)
+            except ValueError:
+                raise RuntimeError(f"{key} は数値 (現在: {raw!r})")
+
+        sm_roster_token_age_min = _required_int("SM_ROSTER_TOKEN_AGE_MIN", 1)
+        sm_roster_token_age_max = _required_int("SM_ROSTER_TOKEN_AGE_MAX", 30)
+        sm_roster_trade_value_usd_min = _required_float("SM_ROSTER_TRADE_VALUE_USD_MIN", 200.0)
+        sm_roster_per_page = _required_int("SM_ROSTER_PER_PAGE", 500)
+        if not (1 <= sm_roster_per_page <= 1000):
+            raise RuntimeError(
+                f"SM_ROSTER_PER_PAGE は 1〜1000 (現在: {sm_roster_per_page})"
             )
 
         # Helius webhook (sm_roster と Helius を繋ぐ送信先設定)。
@@ -213,6 +261,13 @@ class Config:
             sm_roster_fetch_time_jst=sm_roster_fetch_time_jst,
             sm_roster_notify_channel_id=sm_roster_notify_channel_id,
             sm_roster_max_wallets=sm_roster_max_wallets,
+            sm_roster_chain=sm_roster_chain,
+            sm_roster_include_labels=sm_roster_include_labels,
+            sm_roster_exclude_labels=sm_roster_exclude_labels,
+            sm_roster_token_age_min=sm_roster_token_age_min,
+            sm_roster_token_age_max=sm_roster_token_age_max,
+            sm_roster_trade_value_usd_min=sm_roster_trade_value_usd_min,
+            sm_roster_per_page=sm_roster_per_page,
             helius_webhook_url=helius_webhook_url,
             helius_webhook_type=helius_webhook_type,
             helius_webhook_transaction_types=helius_webhook_transaction_types,

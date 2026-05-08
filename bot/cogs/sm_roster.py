@@ -5,13 +5,13 @@
 - 結果を `sm_roster` テーブルに upsert (Helius 登録候補ロスター)
 - /sm-roster-fetch (今すぐ取得) と /sm-roster-list (DB 表示) の手動コマンド
 
-確定済 filter 構成 (会話で合意済、 1 call = 推定 5 credit):
-    chains              : ["solana"]
-    include             : ["Fund", "180D Smart Trader"]
-    exclude             : ["30D Smart Trader"]
-    token_bought_age    : 1〜30 日
-    trade_value_usd     : >= 300
-    per_page            : 100  (24h 全件で 100 未満なので 1 call 完結を確認済)
+filter 構成は .env (SM_ROSTER_*) で上書き可能。 既定値:
+    chain               : SM_ROSTER_CHAIN (solana)
+    include             : SM_ROSTER_INCLUDE_LABELS (Fund,180D Smart Trader)
+    exclude             : SM_ROSTER_EXCLUDE_LABELS (30D Smart Trader)
+    token_bought_age    : SM_ROSTER_TOKEN_AGE_MIN〜MAX (1〜30 日)
+    trade_value_usd     : SM_ROSTER_TRADE_VALUE_USD_MIN (>= 200)
+    per_page            : SM_ROSTER_PER_PAGE (500、 max 1000)
     order               : block_timestamp DESC
 """
 from __future__ import annotations
@@ -35,15 +35,6 @@ from bot.wallet_db import WalletDB
 logger = logging.getLogger(__name__)
 
 JST = ZoneInfo("Asia/Tokyo")
-
-ROSTER_CHAIN = "solana"
-ROSTER_INCLUDE_LABELS = ["Fund", "180D Smart Trader"]
-ROSTER_EXCLUDE_LABELS = ["30D Smart Trader"]
-ROSTER_TOKEN_AGE_MIN = 1
-ROSTER_TOKEN_AGE_MAX = 30
-ROSTER_TRADE_VALUE_USD_MIN = 200
-# MAX=1000
-ROSTER_PER_PAGE = 500
 
 
 def _parse_hhmm(raw: str) -> time:
@@ -209,24 +200,25 @@ class SmRosterCog(commands.Cog):
     async def _fetch_and_store(self, *, tag: str) -> dict[str, Any]:
         """API → 集計 → DB upsert。 サマリ dict を返す。"""
         async with self._fetch_lock:
+            cfg = self.config
             async with NansenClient(
-                self.config.nansen_api_key,
-                self.config.nansen_base_url,
-                chain=ROSTER_CHAIN,
+                cfg.nansen_api_key,
+                cfg.nansen_base_url,
+                chain=cfg.sm_roster_chain,
             ) as client:
                 resp = await client.smart_money_dex_trades(
-                    chains=[ROSTER_CHAIN],
-                    include_labels=ROSTER_INCLUDE_LABELS,
-                    exclude_labels=ROSTER_EXCLUDE_LABELS,
-                    per_page=ROSTER_PER_PAGE,
+                    chains=[cfg.sm_roster_chain],
+                    include_labels=list(cfg.sm_roster_include_labels),
+                    exclude_labels=list(cfg.sm_roster_exclude_labels),
+                    per_page=cfg.sm_roster_per_page,
                     order_field="block_timestamp",
                     order_direction="DESC",
                     extra_filters={
                         "token_bought_age_days": {
-                            "min": ROSTER_TOKEN_AGE_MIN,
-                            "max": ROSTER_TOKEN_AGE_MAX,
+                            "min": cfg.sm_roster_token_age_min,
+                            "max": cfg.sm_roster_token_age_max,
                         },
-                        "trade_value_usd": {"min": ROSTER_TRADE_VALUE_USD_MIN},
+                        "trade_value_usd": {"min": cfg.sm_roster_trade_value_usd_min},
                     },
                 )
                 credits_used = client.credits_used
