@@ -466,21 +466,56 @@ def _build_signal_embed(
 
     sym = token_info.symbol if token_info and token_info.symbol else None
 
-    # タイトルにラベルを詰めない: 「方向 ticker · wallet (label)」 のみ
-    title_parts = [f"{dir_emoji} {dir_word}"]
-    if sym:
-        title_parts.append(f"${sym}")
+    # タイトルは方向と wallet のみ (ticker / ラベルは要素に分離)
     wallet_disp = _short(wallet)
     if wallet_label:
         wallet_disp = f"{wallet_disp} ({wallet_label})"
-    title_parts.append(wallet_disp)
-    title = "  ·  ".join(title_parts)
+    title = f"{dir_emoji} {dir_word}  ·  {wallet_disp}"
 
     embed = discord.Embed(title=title, color=color)
     if token_info and token_info.image_url:
         embed.set_thumbnail(url=token_info.image_url)
 
-    # ラベル (大口 / 群衆) は専用フィールドに切り出し。 該当無しなら出さない
+    # description: 1 行 1 メタ で縦に詰める
+    token_label = f"${sym}" if sym else "token"
+    if is_buy:
+        flow_text = (
+            f"{_fmt_amount(abs(quote_change))} {quote_label} → "
+            f"{_fmt_amount(abs(target_change))} {token_label}"
+        )
+    else:
+        flow_text = (
+            f"{_fmt_amount(abs(target_change))} {token_label} → "
+            f"{_fmt_amount(abs(quote_change))} {quote_label}"
+        )
+
+    nansen_url = f"https://app.nansen.ai/profiler/{wallet}?chain=solana"
+    solscan_wallet = f"https://solscan.io/account/{wallet}"
+    wallet_line = f"`{_short(wallet)}`"
+    if wallet_label:
+        wallet_line += f" **{wallet_label}**"
+    wallet_line += f" · [solscan]({solscan_wallet}) · [Nansen]({nansen_url})"
+
+    desc_lines: list[str] = []
+    if sym:
+        desc_lines.append(f"💲 ticker：**${sym}**")
+    desc_lines.append(f"💱 取引：**{flow_text}**")
+    if token_info and token_info.market_cap:
+        desc_lines.append(f"📈 mcap：{_fmt_usd(token_info.market_cap)}")
+    desc_lines.append(f"💬 CA：`{target_mint}`")
+    x_md = x_search_links_md(sym, target_mint)
+    if x_md:
+        desc_lines.append(f"🔍 X：{x_md}")
+    desc_lines.append(f"🤖 {grok_token_link_md(sym, target_mint)}")
+    desc_lines.append(f"🔗 Trade：{trade_links_md(target_mint, chain='solana')}")
+    desc_lines.append(f"👛 wallet：{wallet_line}")
+    sig = event.get("signature") or ""
+    if sig:
+        sig_url = f"https://solscan.io/tx/{sig}"
+        desc_lines.append(f"📌 tx：[`{sig[:12]}…`]({sig_url})")
+    embed.description = "\n".join(desc_lines)
+
+    # ラベル (大口 / 群衆) は専用フィールド (1 行で詰めるが視覚的に区切る)
     extra_labels: list[str] = []
     if is_large:
         extra_labels.append("🐋 大口")
@@ -489,58 +524,7 @@ def _build_signal_embed(
     if extra_labels:
         embed.add_field(name="📗 ラベル", value=" ".join(extra_labels), inline=False)
 
-    # 取引フロー
-    token_label = f"${sym}" if sym else "token"
-    if is_buy:
-        flow_text = (
-            f"**{_fmt_amount(abs(quote_change))} {quote_label}** → "
-            f"**{_fmt_amount(abs(target_change))} {token_label}**"
-        )
-    else:
-        flow_text = (
-            f"**{_fmt_amount(abs(target_change))} {token_label}** → "
-            f"**{_fmt_amount(abs(quote_change))} {quote_label}**"
-        )
-    embed.add_field(name="💱 取引", value=flow_text, inline=False)
-
-    # mcap
-    if token_info and token_info.market_cap:
-        embed.add_field(
-            name="📈 mcap",
-            value=_fmt_usd(token_info.market_cap),
-            inline=False,
-        )
-
-    # CA (full)
-    embed.add_field(name="💬 CA", value=f"`{target_mint}`", inline=False)
-
-    # X Search / Grok
-    x_md = x_search_links_md(sym, target_mint)
-    if x_md:
-        embed.add_field(name="🔍 X Search", value=x_md, inline=False)
-    embed.add_field(
-        name="🤖 Grok",
-        value=grok_token_link_md(sym, target_mint),
-        inline=False,
-    )
-
-    # Trade (DexScreener / UnivX / gmgn)
-    embed.add_field(
-        name="🔗 Trade",
-        value=trade_links_md(target_mint, chain="solana"),
-        inline=False,
-    )
-
-    # wallet
-    nansen_url = f"https://app.nansen.ai/profiler/{wallet}?chain=solana"
-    solscan_wallet = f"https://solscan.io/account/{wallet}"
-    wallet_value = f"`{_short(wallet)}`"
-    if wallet_label:
-        wallet_value += f" — **{wallet_label}**"
-    wallet_value += f" · [solscan]({solscan_wallet}) · [Nansen]({nansen_url})"
-    embed.add_field(name="👛 wallet", value=wallet_value, inline=False)
-
-    # 群衆メンバー詳細 (label 付きで表示)
+    # 群衆メンバー詳細 (label 付きで表示)。 名前数が多くなるので field のまま
     if others:
         ol = others_labels or {}
         items: list[str] = []
@@ -554,16 +538,6 @@ def _build_signal_embed(
             name=f"🤝 同 mint を直近 window 内に取引した別 SM ({len(others)})",
             value=f"{sample}{more}",
             inline=False,
-        )
-
-    # tx
-    sig = event.get("signature") or ""
-    if sig:
-        sig_url = f"https://solscan.io/tx/{sig}"
-        embed.add_field(
-            name="🔗 tx",
-            value=f"[`{sig[:12]}…`]({sig_url})",
-            inline=True,
         )
 
     ts = event.get("timestamp")

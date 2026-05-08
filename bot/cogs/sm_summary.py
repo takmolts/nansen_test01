@@ -309,72 +309,58 @@ def _build_token_embed(r: dict, *, rank: int) -> discord.Embed:
     head_token = f"${sym}" if sym else _short(addr)
     title = f"#{rank}  {head_token}"
 
-    desc_parts = [f"score **{score:.1f}**"]
+    embed = discord.Embed(title=title, color=0xE91E63)
+    if isinstance(img, str) and img.startswith("http"):
+        embed.set_thumbnail(url=img)
+
+    # description: 1 行 1 メタで縦圧縮
+    desc_lines: list[str] = []
+    desc_lines.append(f"🏆 score：**{score:.1f}**")
     if first_ts and last_ts:
         try:
             first_dt = datetime.fromtimestamp(int(first_ts), tz=JST)
             last_dt = datetime.fromtimestamp(int(last_ts), tz=JST)
-            desc_parts.append(
-                f"🕒 {first_dt.strftime('%H:%M')}〜{last_dt.strftime('%H:%M')}"
+            desc_lines.append(
+                f"🕒 期間：{first_dt.strftime('%H:%M')}〜{last_dt.strftime('%H:%M')}"
             )
         except Exception:
             pass
-
-    embed = discord.Embed(
-        title=title,
-        description="  ·  ".join(desc_parts),
-        color=0xE91E63,
-    )
-    if isinstance(img, str) and img.startswith("http"):
-        embed.set_thumbnail(url=img)
-
-    # 💵 SM buy
-    buy_value = (
-        f"{_fmt_usd(sum_value_usd)}  "
+    if sym:
+        desc_lines.append(f"💲 ticker：**${sym}**")
+    desc_lines.append(
+        f"💵 SM buy：**{_fmt_usd(sum_value_usd)}** "
         f"({_fmt_sol(sum_sol)} SOL + {_fmt_usd(sum_stable)} stable)"
     )
-    embed.add_field(name="💵 SM buy", value=buy_value, inline=False)
-
-    # 👥 traders (Nansen ラベルがある wallet には括弧で添える)
-    def _disp(b: dict) -> str:
-        w = b.get("wallet") or ""
-        short = _short(w)
-        lbl = b.get("label")
-        return f"{short} ({lbl})" if isinstance(lbl, str) and lbl else short
-
-    sample = ", ".join(_disp(b) for b in buyers[:5])
-    more = f" +{len(buyers)-5}" if len(buyers) > 5 else ""
-    traders_lines = [f"BUY: **{n_buyers}**", sample + more] if sample else [f"BUY: **{n_buyers}**"]
+    traders_summary = f"👥 traders：BUY **{n_buyers}**"
     if n_sellers or sell_trades:
-        traders_lines.append(f"SELL: {n_sellers} wallet / {sell_trades} trades")
+        traders_summary += f"  /  SELL {n_sellers}w·{sell_trades}t"
     if n_large:
-        traders_lines.append(f"🐋 大口 BUY: ×{n_large}")
-    embed.add_field(name="👥 traders", value="\n".join(traders_lines), inline=False)
-
-    # 📈 mcap
+        traders_summary += f"  /  🐋×{n_large}"
+    desc_lines.append(traders_summary)
     if mcap:
-        embed.add_field(name="📈 mcap", value=_fmt_usd(float(mcap)), inline=False)
-
-    # 💬 CA (full)
+        desc_lines.append(f"📈 mcap：{_fmt_usd(float(mcap))}")
     if addr:
-        embed.add_field(name="💬 CA", value=f"`{addr}`", inline=False)
-
-        # 🔍 X Search
+        desc_lines.append(f"💬 CA：`{addr}`")
         x_md = x_search_links_md(sym, addr)
         if x_md:
-            embed.add_field(name="🔍 X Search", value=x_md, inline=False)
+            desc_lines.append(f"🔍 X：{x_md}")
+        desc_lines.append(f"🤖 {grok_token_link_md(sym, addr)}")
+        desc_lines.append(f"🔗 Trade：{trade_links_md(addr, chain='solana')}")
+    embed.description = "\n".join(desc_lines)
 
-        # 🤖 Grok
-        embed.add_field(
-            name="🤖 Grok",
-            value=grok_token_link_md(sym, addr),
-            inline=False,
-        )
+    # buyers 詳細 (label 付き、 名前数があるので field 維持)
+    if buyers:
+        def _disp(b: dict) -> str:
+            w = b.get("wallet") or ""
+            short = _short(w)
+            lbl = b.get("label")
+            return f"{short} ({lbl})" if isinstance(lbl, str) and lbl else short
 
-        # 🔗 Trade
+        sample = ", ".join(_disp(b) for b in buyers[:5])
+        more = f" +{len(buyers)-5}" if len(buyers) > 5 else ""
         embed.add_field(
-            name="🔗 Trade",
-            value=trade_links_md(addr, chain="solana"),
+            name=f"🤝 buyers ({len(buyers)})",
+            value=sample + more,
             inline=False,
         )
 
