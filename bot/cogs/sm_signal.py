@@ -104,6 +104,7 @@ class SmSignalCog(commands.Cog):
         self.bot = bot
         self.config = config
         self._sm_wallets: set[str] = set()
+        self._sm_wallet_labels: dict[str, str] = {}
         self._wallets_last_refresh: float = 0.0
         self._state = _SignalState(
             dedup_window_sec=config.sm_signal_dedup_window_min * 60,
@@ -219,9 +220,14 @@ class SmSignalCog(commands.Cog):
         try:
             async with WalletDB() as db:
                 wallets = await db.list_all_sm_wallets()
+                labels = await db.get_sm_wallet_labels()
             self._sm_wallets = set(wallets)
+            self._sm_wallet_labels = labels
             self._wallets_last_refresh = now
-            logger.debug("[sm_signal] sm wallets refreshed: %d", len(self._sm_wallets))
+            logger.debug(
+                "[sm_signal] sm wallets refreshed: %d (labels=%d)",
+                len(self._sm_wallets), len(self._sm_wallet_labels),
+            )
         except Exception:
             logger.exception("[sm_signal] sm wallets refresh 失敗 (cache 維持)")
 
@@ -383,6 +389,9 @@ class SmSignalCog(commands.Cog):
                 cls["target_mint"], exc_info=True,
             )
 
+        wallet_label = self._sm_wallet_labels.get(wallet)
+        others_labels = {w: self._sm_wallet_labels.get(w) for w in others}
+
         embed = _build_signal_embed(
             event=event,
             wallet=wallet,
@@ -390,6 +399,8 @@ class SmSignalCog(commands.Cog):
             others=others,
             is_large=is_large,
             token_info=token_info,
+            wallet_label=wallet_label,
+            others_labels=others_labels,
         )
         try:
             await thread.send(embed=embed)
@@ -439,6 +450,8 @@ def _build_signal_embed(
     others: set[str],
     is_large: bool,
     token_info: TokenInfo | None = None,
+    wallet_label: str | None = None,
+    others_labels: dict[str, str | None] | None = None,
 ) -> discord.Embed:
     direction = cls["direction"]
     target_mint = cls["target_mint"]
@@ -453,11 +466,14 @@ def _build_signal_embed(
 
     sym = token_info.symbol if token_info and token_info.symbol else None
 
-    # タイトルにラベルを詰めない: 「方向 ticker · wallet」 のみ
+    # タイトルにラベルを詰めない: 「方向 ticker · wallet (label)」 のみ
     title_parts = [f"{dir_emoji} {dir_word}"]
     if sym:
         title_parts.append(f"${sym}")
-    title_parts.append(_short(wallet))
+    wallet_disp = _short(wallet)
+    if wallet_label:
+        wallet_disp = f"{wallet_disp} ({wallet_label})"
+    title_parts.append(wallet_disp)
     title = "  ·  ".join(title_parts)
 
     embed = discord.Embed(title=title, color=color)
@@ -518,15 +534,21 @@ def _build_signal_embed(
     # wallet
     nansen_url = f"https://app.nansen.ai/profiler/{wallet}?chain=solana"
     solscan_wallet = f"https://solscan.io/account/{wallet}"
-    embed.add_field(
-        name="👛 wallet",
-        value=f"`{_short(wallet)}` · [solscan]({solscan_wallet}) · [Nansen]({nansen_url})",
-        inline=False,
-    )
+    wallet_value = f"`{_short(wallet)}`"
+    if wallet_label:
+        wallet_value += f" — **{wallet_label}**"
+    wallet_value += f" · [solscan]({solscan_wallet}) · [Nansen]({nansen_url})"
+    embed.add_field(name="👛 wallet", value=wallet_value, inline=False)
 
-    # 群衆メンバー詳細
+    # 群衆メンバー詳細 (label 付きで表示)
     if others:
-        sample = ", ".join(_short(w) for w in list(others)[:5])
+        ol = others_labels or {}
+        items: list[str] = []
+        for w in list(others)[:5]:
+            short = _short(w)
+            lbl = ol.get(w)
+            items.append(f"{short} ({lbl})" if lbl else short)
+        sample = ", ".join(items)
         more = f" ほか {len(others)-5}" if len(others) > 5 else ""
         embed.add_field(
             name=f"🤝 同 mint を直近 window 内に取引した別 SM ({len(others)})",

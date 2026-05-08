@@ -335,10 +335,16 @@ def _build_token_embed(r: dict, *, rank: int) -> discord.Embed:
     )
     embed.add_field(name="💵 SM buy", value=buy_value, inline=False)
 
-    # 👥 traders
-    sample = ", ".join(_short(b.get("wallet")) for b in buyers[:5])
+    # 👥 traders (Nansen ラベルがある wallet には括弧で添える)
+    def _disp(b: dict) -> str:
+        w = b.get("wallet") or ""
+        short = _short(w)
+        lbl = b.get("label")
+        return f"{short} ({lbl})" if isinstance(lbl, str) and lbl else short
+
+    sample = ", ".join(_disp(b) for b in buyers[:5])
     more = f" +{len(buyers)-5}" if len(buyers) > 5 else ""
-    traders_lines = [f"BUY: **{n_buyers}**  ({sample}{more})"]
+    traders_lines = [f"BUY: **{n_buyers}**", sample + more] if sample else [f"BUY: **{n_buyers}**"]
     if n_sellers or sell_trades:
         traders_lines.append(f"SELL: {n_sellers} wallet / {sell_trades} trades")
     if n_large:

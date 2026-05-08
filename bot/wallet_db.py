@@ -363,6 +363,15 @@ class WalletDB:
             rows = await cursor.fetchall()
             return [row[0] for row in rows]
 
+    async def get_sm_wallet_labels(self) -> dict[str, str]:
+        """sm_roster の wallet_address → last_label の dict。 label が空のものは含めない。"""
+        assert self._conn is not None
+        async with self._conn.execute(
+            "SELECT wallet_address, last_label FROM sm_roster WHERE last_label IS NOT NULL AND last_label != ''"
+        ) as cursor:
+            rows = await cursor.fetchall()
+            return {r[0]: r[1] for r in rows if r[0] and r[1]}
+
     # --- SM signal events (Helius webhook 由来の生 SWAP) ---
 
     async def insert_sm_signal_event(
@@ -464,20 +473,22 @@ class WalletDB:
     async def list_buyers_for_mint(
         self, *, target_mint: str, since_block_ts: int
     ) -> list[aiosqlite.Row]:
-        """指定 mint を since 以降に BUY した wallet 一覧 (USD/SOL 内訳付き)。"""
+        """指定 mint を since 以降に BUY した wallet 一覧 (USD/SOL 内訳 + Nansen label)。"""
         assert self._conn is not None
         sql = """
         SELECT
-            wallet,
+            e.wallet                                                     AS wallet,
             COUNT(*)                                                     AS trades,
-            SUM(CASE WHEN quote_label = 'SOL'
-                     THEN ABS(quote_change) ELSE 0 END)                  AS sum_sol,
-            SUM(CASE WHEN quote_label IN ('USDC','USDT','USD1')
-                     THEN ABS(quote_change) ELSE 0 END)                  AS sum_stable,
-            MAX(block_ts)                                                AS last_ts
-        FROM sm_signal_events
-        WHERE target_mint = ? AND direction = 'BUY' AND block_ts >= ?
-        GROUP BY wallet
+            SUM(CASE WHEN e.quote_label = 'SOL'
+                     THEN ABS(e.quote_change) ELSE 0 END)                AS sum_sol,
+            SUM(CASE WHEN e.quote_label IN ('USDC','USDT','USD1')
+                     THEN ABS(e.quote_change) ELSE 0 END)                AS sum_stable,
+            MAX(e.block_ts)                                              AS last_ts,
+            MAX(r.last_label)                                            AS label
+        FROM sm_signal_events e
+        LEFT JOIN sm_roster r ON r.wallet_address = e.wallet
+        WHERE e.target_mint = ? AND e.direction = 'BUY' AND e.block_ts >= ?
+        GROUP BY e.wallet
         ORDER BY (sum_sol * 200 + sum_stable) DESC
         """
         async with self._conn.execute(sql, (target_mint, int(since_block_ts))) as cursor:
