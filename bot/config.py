@@ -35,6 +35,20 @@ class Config:
     helius_webhook_transaction_types: tuple[str, ...]
     helius_webhook_auth_header: str | None
     helius_webhook_auto_sync: bool
+    webhook_bind_host: str
+    webhook_bind_port: int
+    webhook_path: str
+    sm_signal_thread_id: int | None
+    sm_signal_include_sell: bool
+    sm_signal_large_sol_min: float
+    sm_signal_large_stable_min: float
+    sm_signal_dedup_window_min: int
+    sm_signal_group_window_min: int
+    sm_summary_enabled: bool
+    sm_summary_window_min: int
+    sm_summary_min_wallets: int
+    sm_summary_top_n: int
+    sm_summary_channel_id: int | None
     allowed_channel_ids: frozenset[int]
     dev_guild_id: int | None
     response_mode: str
@@ -113,6 +127,57 @@ class Config:
             os.getenv("HELIUS_WEBHOOK_AUTO_SYNC"), default=False
         )
 
+        # Helius webhook 受信サーバ (bot プロセス内 aiohttp)
+        webhook_bind_host = os.getenv("WEBHOOK_BIND_HOST", "0.0.0.0").strip() or "0.0.0.0"
+        raw_port = os.getenv("WEBHOOK_BIND_PORT", "50150").strip() or "50150"
+        try:
+            webhook_bind_port = int(raw_port)
+        except ValueError:
+            raise RuntimeError(f"WEBHOOK_BIND_PORT は整数 (現在: {raw_port!r})")
+        webhook_path = os.getenv("WEBHOOK_PATH", "/helius-webhook").strip() or "/helius-webhook"
+        if not webhook_path.startswith("/"):
+            webhook_path = "/" + webhook_path
+
+        # SM signal 通知設定
+        raw_signal_thread = os.getenv("SM_SIGNAL_THREAD_ID", "").strip()
+        sm_signal_thread_id = int(raw_signal_thread) if raw_signal_thread else None
+        sm_signal_include_sell = _parse_bool(os.getenv("SM_SIGNAL_INCLUDE_SELL"), default=True)
+
+        def _float_env(key: str, default: float) -> float:
+            raw = os.getenv(key, "").strip()
+            if not raw:
+                return default
+            try:
+                return float(raw)
+            except ValueError:
+                raise RuntimeError(f"{key} は数値 (現在: {raw!r})")
+
+        def _int_env(key: str, default: int) -> int:
+            raw = os.getenv(key, "").strip()
+            if not raw:
+                return default
+            try:
+                return int(raw)
+            except ValueError:
+                raise RuntimeError(f"{key} は整数 (現在: {raw!r})")
+
+        sm_signal_large_sol_min = _float_env("SM_SIGNAL_LARGE_SOL_MIN", 2.0)
+        sm_signal_large_stable_min = _float_env("SM_SIGNAL_LARGE_STABLE_MIN", 200.0)
+        sm_signal_dedup_window_min = _int_env("SM_SIGNAL_DEDUP_WINDOW_MIN", 30)
+        sm_signal_group_window_min = _int_env("SM_SIGNAL_GROUP_WINDOW_MIN", 30)
+
+        # SM summary 集計通知 (毎時、 蓄積データから 2 段目絞り込み + Embed リスト投稿)
+        sm_summary_enabled = _parse_bool(os.getenv("SM_SUMMARY_ENABLED"), default=True)
+        sm_summary_window_min = _int_env("SM_SUMMARY_WINDOW_MIN", 60)
+        sm_summary_min_wallets = _int_env("SM_SUMMARY_MIN_WALLETS", 2)
+        sm_summary_top_n = _int_env("SM_SUMMARY_TOP_N", 10)
+        raw_summary_channel = os.getenv("SM_SUMMARY_CHANNEL_ID", "").strip()
+        if raw_summary_channel:
+            sm_summary_channel_id: int | None = int(raw_summary_channel)
+        else:
+            # 空なら DIGEST_CHANNEL_ID にフォールバック
+            sm_summary_channel_id = digest_channel_id
+
         raw_channels = os.getenv("ALLOWED_CHANNEL_IDS", "").strip()
         channels: frozenset[int] = frozenset()
         if raw_channels:
@@ -153,6 +218,20 @@ class Config:
             helius_webhook_transaction_types=helius_webhook_transaction_types,
             helius_webhook_auth_header=helius_webhook_auth_header,
             helius_webhook_auto_sync=helius_webhook_auto_sync,
+            webhook_bind_host=webhook_bind_host,
+            webhook_bind_port=webhook_bind_port,
+            webhook_path=webhook_path,
+            sm_signal_thread_id=sm_signal_thread_id,
+            sm_signal_include_sell=sm_signal_include_sell,
+            sm_signal_large_sol_min=sm_signal_large_sol_min,
+            sm_signal_large_stable_min=sm_signal_large_stable_min,
+            sm_signal_dedup_window_min=sm_signal_dedup_window_min,
+            sm_signal_group_window_min=sm_signal_group_window_min,
+            sm_summary_enabled=sm_summary_enabled,
+            sm_summary_window_min=sm_summary_window_min,
+            sm_summary_min_wallets=sm_summary_min_wallets,
+            sm_summary_top_n=sm_summary_top_n,
+            sm_summary_channel_id=sm_summary_channel_id,
             allowed_channel_ids=channels,
             dev_guild_id=dev_guild_id,
             response_mode=raw_mode,

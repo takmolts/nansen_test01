@@ -5,6 +5,8 @@
 - 集計は wallet_summary view で動的算出
 - sm_roster: Smart Money DEX trades 由来の Helius 監視候補ロスター
   (1 wallet 1 行、 日次 upsert で観測カウント増加)
+- sm_signal_events: Helius webhook 経由で受け取った 1 SWAP 1 行の生イベント
+  (BUY/SELL/quote_label/数量等を保存。 集計通知 (sm_summary) のソース)
 """
 from __future__ import annotations
 
@@ -78,6 +80,29 @@ class WalletDB:
                 ON sm_roster(last_seen_at);
             CREATE INDEX IF NOT EXISTS idx_sm_roster_helius
                 ON sm_roster(helius_registered);
+
+            CREATE TABLE IF NOT EXISTS sm_signal_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                signature TEXT NOT NULL,
+                block_ts INTEGER NOT NULL,
+                received_at TEXT NOT NULL,
+                wallet TEXT NOT NULL,
+                target_mint TEXT NOT NULL,
+                target_change REAL NOT NULL,
+                quote_label TEXT NOT NULL,
+                quote_mint TEXT,
+                quote_change REAL NOT NULL,
+                direction TEXT NOT NULL,
+                is_large INTEGER NOT NULL DEFAULT 0,
+                is_suppressed INTEGER NOT NULL DEFAULT 0,
+                UNIQUE(signature, wallet, target_mint, direction)
+            );
+            CREATE INDEX IF NOT EXISTS idx_sm_events_block_ts
+                ON sm_signal_events(block_ts);
+            CREATE INDEX IF NOT EXISTS idx_sm_events_target_mint
+                ON sm_signal_events(target_mint);
+            CREATE INDEX IF NOT EXISTS idx_sm_events_wallet
+                ON sm_signal_events(wallet);
             """
         )
         await self._conn.commit()
@@ -337,6 +362,135 @@ class WalletDB:
         ) as cursor:
             rows = await cursor.fetchall()
             return [row[0] for row in rows]
+
+    # --- SM signal events (Helius webhook 由来の生 SWAP) ---
+
+    async def insert_sm_signal_event(
+        self,
+        *,
+        signature: str,
+        block_ts: int,
+        wallet: str,
+        target_mint: str,
+        target_change: float,
+        quote_label: str,
+        quote_mint: str | None,
+        quote_change: float,
+        direction: str,
+        is_large: bool,
+        is_suppressed: bool,
+    ) -> bool:
+        """1 SWAP を sm_signal_events に insert する。
+
+        UNIQUE(signature, wallet, target_mint, direction) 制約により Helius の
+        re-delivery には自然に冪等。 insert された場合は True、 既存なら False。
+        """
+        assert self._conn is not None
+        now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        try:
+            cursor = await self._conn.execute(
+                """
+                INSERT OR IGNORE INTO sm_signal_events (
+                    signature, block_ts, received_at, wallet,
+                    target_mint, target_change,
+                    quote_label, quote_mint, quote_change,
+                    direction, is_large, is_suppressed
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    signature, int(block_ts), now_iso, wallet,
+                    target_mint, float(target_change),
+                    quote_label, quote_mint, float(quote_change),
+                    direction,
+                    1 if is_large else 0,
+                    1 if is_suppressed else 0,
+                ),
+            )
+            inserted = cursor.rowcount > 0
+            await self._conn.commit()
+            return inserted
+        except Exception:
+            logger.exception("insert_sm_signal_event 失敗 sig=%s wallet=%s", signature, wallet)
+            return False
+
+    async def aggregate_sm_signals(
+        self,
+        *,
+        since_block_ts: int,
+        min_distinct_buyers: int = 2,
+        limit: int = 20,
+    ) -> list[aiosqlite.Row]:
+        """`since_block_ts` 以降の sm_signal_events を target_mint 単位で集計。
+
+        gate: distinct_buyers >= min_distinct_buyers (== 別 SM wallet が同 mint を
+        BUY した数の閾値)。 sort: distinct_buyers DESC → buy_quote 合計 DESC。
+        """
+        assert self._conn is not None
+        sql = """
+        SELECT
+            target_mint,
+            COUNT(DISTINCT CASE WHEN direction = 'BUY' THEN wallet END)  AS distinct_buyers,
+            COUNT(DISTINCT CASE WHEN direction = 'SELL' THEN wallet END) AS distinct_sellers,
+            SUM(CASE WHEN direction = 'BUY'  THEN 1 ELSE 0 END)          AS buy_trades,
+            SUM(CASE WHEN direction = 'SELL' THEN 1 ELSE 0 END)          AS sell_trades,
+            SUM(CASE WHEN direction = 'BUY'  AND quote_label = 'SOL'
+                     THEN ABS(quote_change) ELSE 0 END)                  AS sum_buy_sol,
+            SUM(CASE WHEN direction = 'BUY'
+                     AND quote_label IN ('USDC','USDT','USD1')
+                     THEN ABS(quote_change) ELSE 0 END)                  AS sum_buy_stable,
+            SUM(CASE WHEN direction = 'SELL' AND quote_label = 'SOL'
+                     THEN ABS(quote_change) ELSE 0 END)                  AS sum_sell_sol,
+            SUM(CASE WHEN direction = 'SELL'
+                     AND quote_label IN ('USDC','USDT','USD1')
+                     THEN ABS(quote_change) ELSE 0 END)                  AS sum_sell_stable,
+            SUM(CASE WHEN direction = 'BUY'  AND is_large = 1
+                     THEN 1 ELSE 0 END)                                  AS n_large_buys,
+            MAX(CASE WHEN direction = 'BUY'
+                     THEN ABS(quote_change) END)                         AS max_buy_quote,
+            MIN(block_ts)                                                AS first_seen_ts,
+            MAX(block_ts)                                                AS last_seen_ts
+        FROM sm_signal_events
+        WHERE block_ts >= ?
+        GROUP BY target_mint
+        HAVING distinct_buyers >= ?
+        ORDER BY distinct_buyers DESC, (sum_buy_sol * 200 + sum_buy_stable) DESC
+        LIMIT ?
+        """
+        async with self._conn.execute(
+            sql, (int(since_block_ts), int(min_distinct_buyers), int(limit))
+        ) as cursor:
+            return await cursor.fetchall()
+
+    async def list_buyers_for_mint(
+        self, *, target_mint: str, since_block_ts: int
+    ) -> list[aiosqlite.Row]:
+        """指定 mint を since 以降に BUY した wallet 一覧 (USD/SOL 内訳付き)。"""
+        assert self._conn is not None
+        sql = """
+        SELECT
+            wallet,
+            COUNT(*)                                                     AS trades,
+            SUM(CASE WHEN quote_label = 'SOL'
+                     THEN ABS(quote_change) ELSE 0 END)                  AS sum_sol,
+            SUM(CASE WHEN quote_label IN ('USDC','USDT','USD1')
+                     THEN ABS(quote_change) ELSE 0 END)                  AS sum_stable,
+            MAX(block_ts)                                                AS last_ts
+        FROM sm_signal_events
+        WHERE target_mint = ? AND direction = 'BUY' AND block_ts >= ?
+        GROUP BY wallet
+        ORDER BY (sum_sol * 200 + sum_stable) DESC
+        """
+        async with self._conn.execute(sql, (target_mint, int(since_block_ts))) as cursor:
+            return await cursor.fetchall()
+
+    async def sm_signal_events_count(self, *, since_block_ts: int = 0) -> int:
+        assert self._conn is not None
+        async with self._conn.execute(
+            "SELECT COUNT(*) FROM sm_signal_events WHERE block_ts >= ?",
+            (int(since_block_ts),),
+        ) as cur:
+            row = await cur.fetchone()
+            return int(row[0]) if row else 0
 
     async def mark_sm_helius_registered(self, wallets: Iterable[str]) -> int:
         """Helius 登録済みフラグを立てる。 件数を返す。"""
