@@ -47,9 +47,16 @@ WALLET_CACHE_TTL_SEC = 60.0
 class _SignalState:
     """signature dedup と (wallet, mint, direction) の rolling window 管理。"""
 
-    def __init__(self, *, dedup_window_sec: int, group_window_sec: int):
+    def __init__(
+        self,
+        *,
+        dedup_window_sec: int,
+        group_window_sec: int,
+        realtime_window_sec: int = 0,
+    ):
         self._dedup_window = dedup_window_sec
         self._group_window = group_window_sec
+        self._realtime_window = realtime_window_sec
         # 古い側から prune するため deque
         self._signatures: deque[tuple[float, str]] = deque()
         self._signatures_set: set[str] = set()
@@ -90,8 +97,19 @@ class _SignalState:
         self._obs.append((ts, wallet, mint, direction, signature))
         self._prune(ts)
 
+    def distinct_wallets_for_mint(
+        self, mint: str, direction: str, window_sec: int, ts: float
+    ) -> set[str]:
+        """直近 window 内で同 mint × 同 direction を取引した wallet 一覧 (自身含む)。"""
+        cutoff = ts - window_sec
+        return {
+            w
+            for o_ts, w, m, d, _ in self._obs
+            if o_ts >= cutoff and m == mint and d == direction
+        }
+
     def _prune(self, now: float) -> None:
-        cutoff = now - max(self._dedup_window, self._group_window)
+        cutoff = now - max(self._dedup_window, self._group_window, self._realtime_window)
         while self._signatures and self._signatures[0][0] < cutoff:
             _, old_sig = self._signatures.popleft()
             self._signatures_set.discard(old_sig)
@@ -109,6 +127,7 @@ class SmSignalCog(commands.Cog):
         self._state = _SignalState(
             dedup_window_sec=config.sm_signal_dedup_window_min * 60,
             group_window_sec=config.sm_signal_group_window_min * 60,
+            realtime_window_sec=config.sm_summary_realtime_window_min * 60,
         )
         self._runner: web.AppRunner | None = None
         self._site: web.TCPSite | None = None
@@ -316,6 +335,12 @@ class SmSignalCog(commands.Cog):
             )
             self._state.record_observation(wallet, target_mint, direction, sig, ts_f)
 
+            # 速報 (注目銘柄リアルタイム通知 → SM_SUMMARY_CHANNEL_ID)
+            if direction == "BUY" and self.config.sm_summary_realtime_enabled:
+                await self._maybe_post_realtime(
+                    event=event, wallet=wallet, cls=cls, ts_f=ts_f,
+                )
+
     async def _record_event_to_db(
         self,
         *,
@@ -351,6 +376,65 @@ class SmSignalCog(commands.Cog):
         if quote_label in STABLE_LABELS.values():
             return v >= self.config.sm_signal_large_stable_min
         return False
+
+    def _is_realtime_whale_buy(self, quote_label: str, quote_change: float) -> bool:
+        v = abs(quote_change)
+        if quote_label == "SOL":
+            return v >= self.config.sm_summary_realtime_whale_sol_min
+        if quote_label in STABLE_LABELS.values():
+            return v >= self.config.sm_summary_realtime_whale_stable_min
+        return False
+
+    async def _maybe_post_realtime(
+        self,
+        *,
+        event: dict[str, Any],
+        wallet: str,
+        cls: dict[str, Any],
+        ts_f: float,
+    ) -> None:
+        """BUY が群衆ブレイク or whale 単発を満たせば sm_summary に速報を依頼。"""
+        target_mint = cls["target_mint"]
+        quote_label = cls["quote_label"]
+        quote_change = cls["quote_change"]
+
+        is_whale_buy = self._is_realtime_whale_buy(quote_label, quote_change)
+        window_sec = self.config.sm_summary_realtime_window_min * 60
+        buyers = self._state.distinct_wallets_for_mint(
+            target_mint, "BUY", window_sec, ts_f
+        )
+        # record_observation 済みなので自身は含まれているはずだが、 念のため。
+        buyers.add(wallet)
+        is_crowd_break = len(buyers) >= self.config.sm_summary_realtime_min_buyers
+
+        if not (is_whale_buy or is_crowd_break):
+            return
+
+        cog = self.bot.get_cog("SmSummaryCog")
+        if cog is None:
+            logger.debug("[sm_signal] sm_summary cog 未ロード → 速報スキップ")
+            return
+        notify = getattr(cog, "notify_realtime", None)
+        if not callable(notify):
+            logger.debug("[sm_signal] sm_summary cog に notify_realtime 無し")
+            return
+
+        other_wallets = buyers - {wallet}
+        other_labels = {w: self._sm_wallet_labels.get(w) for w in other_wallets}
+        try:
+            await notify(
+                event=event,
+                wallet=wallet,
+                cls=cls,
+                distinct_buyers=len(buyers),
+                other_wallets=other_wallets,
+                other_wallets_labels=other_labels,
+                wallet_label=self._sm_wallet_labels.get(wallet),
+                is_whale_buy=is_whale_buy,
+                is_crowd_break=is_crowd_break,
+            )
+        except Exception:
+            logger.exception("[sm_signal] 速報通知失敗 mint=%s", target_mint)
 
     async def _post_signal(
         self,

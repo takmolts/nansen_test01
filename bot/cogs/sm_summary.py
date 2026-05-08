@@ -32,7 +32,7 @@ from discord.ext import commands
 
 from bot.config import Config
 from bot.links import grok_token_link_md, trade_links_md, x_search_links_md
-from bot.token_info import get_token_infos
+from bot.token_info import TokenInfo, get_token_info, get_token_infos
 from bot.wallet_db import WalletDB
 
 logger = logging.getLogger(__name__)
@@ -89,6 +89,8 @@ class SmSummaryCog(commands.Cog):
         self.config = config
         self._auto_task: asyncio.Task | None = None
         self._lock = asyncio.Lock()
+        # 速報の mint 単位 cooldown (mint -> last_notify_ts)
+        self._realtime_cooldown: dict[str, float] = {}
 
     async def cog_load(self) -> None:
         # discord.py 2.0+ では __init__ から bot.loop に触れないため、
@@ -242,6 +244,99 @@ class SmSummaryCog(commands.Cog):
         except Exception:
             logger.exception("[sm_summary] 投稿失敗")
 
+    # ---- 速報 (sm_signal cog から呼ばれる) ----
+
+    async def notify_realtime(
+        self,
+        *,
+        event: dict[str, Any],
+        wallet: str,
+        cls: dict[str, Any],
+        distinct_buyers: int,
+        other_wallets: set[str],
+        other_wallets_labels: dict[str, str | None],
+        wallet_label: str | None,
+        is_whale_buy: bool,
+        is_crowd_break: bool,
+    ) -> None:
+        """sm_signal cog の BUY hook から呼ばれる。 mint cooldown を見て speed 投稿する。"""
+        if not self.config.sm_summary_realtime_enabled:
+            return
+        target_mint = cls.get("target_mint")
+        if not isinstance(target_mint, str) or not target_mint:
+            return
+
+        cooldown_sec = self.config.sm_summary_realtime_cooldown_min * 60
+        now = time.time()
+        last = self._realtime_cooldown.get(target_mint, 0.0)
+        if now - last < cooldown_sec:
+            logger.info(
+                "[sm_summary:realtime] cooldown skip mint=%s elapsed=%.0fs",
+                target_mint, now - last,
+            )
+            return
+
+        ch_id = self.config.sm_summary_channel_id
+        if not ch_id:
+            logger.warning("[sm_summary:realtime] 投稿先未設定 → 速報スキップ")
+            return
+        channel = self.bot.get_channel(ch_id)
+        if channel is None:
+            try:
+                channel = await self.bot.fetch_channel(ch_id)
+            except Exception:
+                logger.exception(
+                    "[sm_summary:realtime] channel fetch 失敗 id=%s", ch_id
+                )
+                return
+        if not isinstance(channel, (discord.TextChannel, discord.Thread)):
+            logger.warning(
+                "[sm_summary:realtime] channel %s が TextChannel/Thread ではない (%s)",
+                ch_id, type(channel).__name__,
+            )
+            return
+
+        token_info: TokenInfo | None = None
+        try:
+            token_info = await get_token_info(target_mint)
+        except Exception:
+            logger.warning(
+                "[sm_summary:realtime] token_info 取得失敗 mint=%s",
+                target_mint, exc_info=True,
+            )
+
+        embed = _build_realtime_embed(
+            event=event,
+            wallet=wallet,
+            cls=cls,
+            distinct_buyers=distinct_buyers,
+            other_wallets=other_wallets,
+            other_wallets_labels=other_wallets_labels,
+            wallet_label=wallet_label,
+            is_whale_buy=is_whale_buy,
+            is_crowd_break=is_crowd_break,
+            window_min=self.config.sm_summary_realtime_window_min,
+            min_buyers=self.config.sm_summary_realtime_min_buyers,
+            token_info=token_info,
+        )
+
+        triggers: list[str] = []
+        if is_whale_buy:
+            triggers.append("whale_buy")
+        if is_crowd_break:
+            triggers.append(f"crowd_break(N={distinct_buyers})")
+        logger.info(
+            "[sm_summary:realtime] post mint=%s wallet=%s triggers=%s",
+            target_mint, wallet[:8] + "…", ",".join(triggers) or "?",
+        )
+        try:
+            await channel.send(embed=embed)
+            self._realtime_cooldown[target_mint] = now
+        except Exception:
+            logger.exception(
+                "[sm_summary:realtime] 投稿失敗 mint=%s", target_mint
+            )
+
     # ---- Slash command ----
 
     @app_commands.command(
@@ -363,6 +458,117 @@ def _build_token_embed(r: dict, *, rank: int) -> discord.Embed:
             value=sample + more,
             inline=False,
         )
+
+    return embed
+
+
+def _fmt_amount(v: float) -> str:
+    a = abs(v)
+    if a >= 1_000_000_000:
+        return f"{v/1_000_000_000:.2f}B"
+    if a >= 1_000_000:
+        return f"{v/1_000_000:.2f}M"
+    if a >= 1_000:
+        return f"{v/1_000:.2f}K"
+    if a >= 1:
+        return f"{v:.4f}"
+    return f"{v:.6f}"
+
+
+def _build_realtime_embed(
+    *,
+    event: dict[str, Any],
+    wallet: str,
+    cls: dict[str, Any],
+    distinct_buyers: int,
+    other_wallets: set[str],
+    other_wallets_labels: dict[str, str | None],
+    wallet_label: str | None,
+    is_whale_buy: bool,
+    is_crowd_break: bool,
+    window_min: int,
+    min_buyers: int,
+    token_info: TokenInfo | None,
+) -> discord.Embed:
+    target_mint = cls["target_mint"]
+    target_change = cls["target_change"]
+    quote_label = cls["quote_label"]
+    quote_change = cls["quote_change"]
+
+    sym = token_info.symbol if token_info and token_info.symbol else None
+    token_label = f"${sym}" if sym else "token"
+    head = f"${sym}" if sym else _short(target_mint)
+
+    badges: list[str] = []
+    if is_whale_buy:
+        badges.append("🐋 大口")
+    if is_crowd_break:
+        badges.append(f"🤝 群衆 {distinct_buyers}/{min_buyers}")
+    badge_text = "  ".join(badges) if badges else ""
+
+    title = f"🚨 速報 BUY  ·  {head}"
+    embed = discord.Embed(title=title, color=0xFF9800)
+    if token_info and token_info.image_url:
+        embed.set_thumbnail(url=token_info.image_url)
+
+    flow_text = (
+        f"{_fmt_amount(abs(quote_change))} {quote_label} → "
+        f"{_fmt_amount(abs(target_change))} {token_label}"
+    )
+
+    nansen_url = f"https://app.nansen.ai/profiler/{wallet}?chain=solana"
+    solscan_wallet = f"https://solscan.io/account/{wallet}"
+    wallet_line = f"`{_short(wallet)}`"
+    if wallet_label:
+        wallet_line += f" **{wallet_label}**"
+    wallet_line += f" · [solscan]({solscan_wallet}) · [Nansen]({nansen_url})"
+
+    desc_lines: list[str] = []
+    if badge_text:
+        desc_lines.append(badge_text)
+    if sym:
+        desc_lines.append(f"💲 ticker：**${sym}**")
+    desc_lines.append(f"💱 取引：**{flow_text}**")
+    if token_info and token_info.market_cap:
+        desc_lines.append(f"📈 mcap：{_fmt_usd(float(token_info.market_cap))}")
+    desc_lines.append(
+        f"👥 SM buyers：**{distinct_buyers}** 人 (直近 {window_min} 分)"
+    )
+    desc_lines.append(f"👛 wallet：{wallet_line}")
+    desc_lines.append(f"💬 CA：`{target_mint}`")
+    x_md = x_search_links_md(sym, target_mint)
+    if x_md:
+        desc_lines.append(f"🔍 X：{x_md}")
+    desc_lines.append(f"🤖 {grok_token_link_md(sym, target_mint)}")
+    desc_lines.append(f"🔗 Trade：{trade_links_md(target_mint, chain='solana')}")
+    sig = event.get("signature") or ""
+    if sig:
+        sig_url = f"https://solscan.io/tx/{sig}"
+        desc_lines.append(f"📌 tx：[`{sig[:12]}…`]({sig_url})")
+    embed.description = "\n".join(desc_lines)
+
+    if other_wallets:
+        items: list[str] = []
+        for w in list(other_wallets)[:5]:
+            short = _short(w)
+            lbl = other_wallets_labels.get(w)
+            items.append(f"{short} ({lbl})" if lbl else short)
+        sample = ", ".join(items)
+        more = (
+            f" ほか {len(other_wallets) - 5}" if len(other_wallets) > 5 else ""
+        )
+        embed.add_field(
+            name=f"🤝 直近 {window_min} 分の他 SM buyers ({len(other_wallets)})",
+            value=f"{sample}{more}",
+            inline=False,
+        )
+
+    ts = event.get("timestamp")
+    if isinstance(ts, (int, float)):
+        try:
+            embed.timestamp = datetime.fromtimestamp(float(ts), tz=timezone.utc)
+        except (OverflowError, OSError, ValueError):
+            pass
 
     return embed
 

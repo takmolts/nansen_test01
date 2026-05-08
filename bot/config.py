@@ -56,6 +56,12 @@ class Config:
     sm_summary_min_wallets: int
     sm_summary_top_n: int
     sm_summary_channel_id: int | None
+    sm_summary_realtime_enabled: bool
+    sm_summary_realtime_window_min: int
+    sm_summary_realtime_min_buyers: int
+    sm_summary_realtime_whale_sol_min: float
+    sm_summary_realtime_whale_stable_min: float
+    sm_summary_realtime_cooldown_min: int
     allowed_channel_ids: frozenset[int]
     dev_guild_id: int | None
     response_mode: str
@@ -226,6 +232,22 @@ class Config:
             # 空なら DIGEST_CHANNEL_ID にフォールバック
             sm_summary_channel_id = digest_channel_id
 
+        # SM Summary 速報 (event 駆動の即時通知。 sm_signal の BUY を見て判定)
+        sm_summary_realtime_enabled = _parse_bool(
+            os.getenv("SM_SUMMARY_REALTIME_ENABLED"), default=True
+        )
+        sm_summary_realtime_window_min = _int_env("SM_SUMMARY_REALTIME_WINDOW_MIN", 30)
+        sm_summary_realtime_min_buyers = _int_env("SM_SUMMARY_REALTIME_MIN_BUYERS", 3)
+        sm_summary_realtime_whale_sol_min = _float_env(
+            "SM_SUMMARY_REALTIME_WHALE_SOL_MIN", 20.0
+        )
+        sm_summary_realtime_whale_stable_min = _float_env(
+            "SM_SUMMARY_REALTIME_WHALE_STABLE_MIN", 2000.0
+        )
+        sm_summary_realtime_cooldown_min = _int_env(
+            "SM_SUMMARY_REALTIME_COOLDOWN_MIN", 60
+        )
+
         raw_channels = os.getenv("ALLOWED_CHANNEL_IDS", "").strip()
         channels: frozenset[int] = frozenset()
         if raw_channels:
@@ -287,6 +309,12 @@ class Config:
             sm_summary_min_wallets=sm_summary_min_wallets,
             sm_summary_top_n=sm_summary_top_n,
             sm_summary_channel_id=sm_summary_channel_id,
+            sm_summary_realtime_enabled=sm_summary_realtime_enabled,
+            sm_summary_realtime_window_min=sm_summary_realtime_window_min,
+            sm_summary_realtime_min_buyers=sm_summary_realtime_min_buyers,
+            sm_summary_realtime_whale_sol_min=sm_summary_realtime_whale_sol_min,
+            sm_summary_realtime_whale_stable_min=sm_summary_realtime_whale_stable_min,
+            sm_summary_realtime_cooldown_min=sm_summary_realtime_cooldown_min,
             allowed_channel_ids=channels,
             dev_guild_id=dev_guild_id,
             response_mode=raw_mode,
