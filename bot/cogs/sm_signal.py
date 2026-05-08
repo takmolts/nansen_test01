@@ -29,7 +29,7 @@ import discord
 from discord.ext import commands
 
 from bot.config import Config
-from bot.links import trade_links_md
+from bot.links import grok_token_link_md, trade_links_md, x_search_links_md
 from bot.sm_signal_classifier import (
     STABLE_LABELS,
     classify_swap,
@@ -451,20 +451,29 @@ def _build_signal_embed(
     dir_emoji = "🟢" if is_buy else "🔴"
     dir_word = "BUY" if is_buy else "SELL"
 
-    labels: list[str] = [f"{dir_emoji} {dir_word}"]
-    if is_large:
-        labels.append("🐋 大口")
-    if others:
-        labels.append(f"🤝 群衆×{len(others)}")
-    label_str = " ".join(labels)
-
     sym = token_info.symbol if token_info and token_info.symbol else None
-    title_token = f"${sym}" if sym else _short(target_mint)
-    title = f"{label_str} {title_token}  ({_short(wallet)})"
+
+    # タイトルにラベルを詰めない: 「方向 ticker · wallet」 のみ
+    title_parts = [f"{dir_emoji} {dir_word}"]
+    if sym:
+        title_parts.append(f"${sym}")
+    title_parts.append(_short(wallet))
+    title = "  ·  ".join(title_parts)
+
     embed = discord.Embed(title=title, color=color)
     if token_info and token_info.image_url:
         embed.set_thumbnail(url=token_info.image_url)
 
+    # ラベル (大口 / 群衆) は専用フィールドに切り出し。 該当無しなら出さない
+    extra_labels: list[str] = []
+    if is_large:
+        extra_labels.append("🐋 大口")
+    if others:
+        extra_labels.append(f"🤝 群衆×{len(others)}")
+    if extra_labels:
+        embed.add_field(name="📗 ラベル", value=" ".join(extra_labels), inline=False)
+
+    # 取引フロー
     token_label = f"${sym}" if sym else "token"
     if is_buy:
         flow_text = (
@@ -478,6 +487,35 @@ def _build_signal_embed(
         )
     embed.add_field(name="💱 取引", value=flow_text, inline=False)
 
+    # mcap
+    if token_info and token_info.market_cap:
+        embed.add_field(
+            name="📈 mcap",
+            value=_fmt_usd(token_info.market_cap),
+            inline=False,
+        )
+
+    # CA (full)
+    embed.add_field(name="💬 CA", value=f"`{target_mint}`", inline=False)
+
+    # X Search / Grok
+    x_md = x_search_links_md(sym, target_mint)
+    if x_md:
+        embed.add_field(name="🔍 X Search", value=x_md, inline=False)
+    embed.add_field(
+        name="🤖 Grok",
+        value=grok_token_link_md(sym, target_mint),
+        inline=False,
+    )
+
+    # Trade (DexScreener / UnivX / gmgn)
+    embed.add_field(
+        name="🔗 Trade",
+        value=trade_links_md(target_mint, chain="solana"),
+        inline=False,
+    )
+
+    # wallet
     nansen_url = f"https://app.nansen.ai/profiler/{wallet}?chain=solana"
     solscan_wallet = f"https://solscan.io/account/{wallet}"
     embed.add_field(
@@ -486,16 +524,7 @@ def _build_signal_embed(
         inline=False,
     )
 
-    token_lines = [f"`{target_mint}`"]
-    if token_info and token_info.market_cap:
-        token_lines.append(f"📈 mcap: {_fmt_usd(token_info.market_cap)}")
-    token_lines.append(trade_links_md(target_mint, chain="solana"))
-    embed.add_field(
-        name=f"🪙 {sym}" if sym else "🪙 token",
-        value="\n".join(token_lines),
-        inline=False,
-    )
-
+    # 群衆メンバー詳細
     if others:
         sample = ", ".join(_short(w) for w in list(others)[:5])
         more = f" ほか {len(others)-5}" if len(others) > 5 else ""
@@ -505,6 +534,7 @@ def _build_signal_embed(
             inline=False,
         )
 
+    # tx
     sig = event.get("signature") or ""
     if sig:
         sig_url = f"https://solscan.io/tx/{sig}"

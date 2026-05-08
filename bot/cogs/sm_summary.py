@@ -31,7 +31,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from bot.config import Config
-from bot.links import trade_links_md
+from bot.links import grok_token_link_md, trade_links_md, x_search_links_md
 from bot.token_info import get_token_infos
 from bot.wallet_db import WalletDB
 
@@ -233,9 +233,12 @@ class SmSummaryCog(commands.Cog):
             )
             return
 
-        embed = _build_summary_embed(rows, window_min=window_min, tag=tag)
+        # ヘッダ + token ごとに 1 embed (Discord は 1 message に最大 10 embed)
+        rows = rows[:10]
+        header = _build_header_text(rows, window_min=window_min, tag=tag)
+        embeds = [_build_token_embed(r, rank=i + 1) for i, r in enumerate(rows)]
         try:
-            await channel.send(embed=embed)
+            await channel.send(content=header, embeds=embeds)
         except Exception:
             logger.exception("[sm_summary] 投稿失敗")
 
@@ -274,72 +277,101 @@ class SmSummaryCog(commands.Cog):
         await interaction.followup.send("集計を投稿しました。")
 
 
-def _build_summary_embed(
+def _build_header_text(
     rows: list[dict], *, window_min: int, tag: str
-) -> discord.Embed:
-    title = "🛰️ Smart Wallet Signal Summary"
-    if tag == "auto":
-        title += f" (直近 {window_min} 分)"
-    else:
-        title += f" (手動 / 直近 {window_min} 分)"
-
-    desc_lines = [
-        f"群衆 ≥ {len(rows)} mint" if rows else "該当なし",
-        f"スコア = 群衆×10 + 取引数×0.5 + 大口×5 + log10(USD proxy)",
-    ]
-    embed = discord.Embed(
-        title=title,
-        description="\n".join(desc_lines),
-        color=0xE91E63,
+) -> str:
+    """Discord メッセージ本文 (embeds の上に出るテキスト) を生成。"""
+    suffix = "(自動)" if tag == "auto" else "(手動)"
+    return (
+        f"🛰️ **Smart Wallet Signal Summary** {suffix} 直近 {window_min} 分\n"
+        f"群衆 ≥ 2 の銘柄 **{len(rows)}** 件 ｜ "
+        f"スコア = 群衆×10 + 取引数×0.5 + 大口×5 + log10(USD proxy)"
     )
 
-    for i, r in enumerate(rows, start=1):
-        addr = r.get("target_mint", "")
-        sym = r.get("dex_symbol")
-        score = r.get("score", 0)
-        n_buyers = r.get("distinct_buyers", 0)
-        n_sellers = r.get("distinct_sellers", 0)
-        buy_trades = r.get("buy_trades", 0)
-        sell_trades = r.get("sell_trades", 0)
-        n_large = r.get("n_large_buys", 0)
-        sum_sol = float(r.get("sum_buy_sol") or 0)
-        sum_stable = float(r.get("sum_buy_stable") or 0)
-        mcap = r.get("dex_marketcap")
-        last_ts = r.get("last_seen_ts")
-        first_ts = r.get("first_seen_ts")
 
-        buyers = r.get("buyers") or []
-        sample = ", ".join(_short(b.get("wallet")) for b in buyers[:5])
-        more = f" +{len(buyers)-5}" if len(buyers) > 5 else ""
+def _build_token_embed(r: dict, *, rank: int) -> discord.Embed:
+    addr = r.get("target_mint", "")
+    sym = r.get("dex_symbol")
+    score = float(r.get("score") or 0.0)
+    n_buyers = int(r.get("distinct_buyers") or 0)
+    n_sellers = int(r.get("distinct_sellers") or 0)
+    sell_trades = int(r.get("sell_trades") or 0)
+    n_large = int(r.get("n_large_buys") or 0)
+    sum_sol = float(r.get("sum_buy_sol") or 0)
+    sum_stable = float(r.get("sum_buy_stable") or 0)
+    sum_value_usd = sum_sol * SOL_USD_PROXY + sum_stable
+    mcap = r.get("dex_marketcap")
+    img = r.get("dex_image_url")
+    first_ts = r.get("first_seen_ts")
+    last_ts = r.get("last_seen_ts")
+    buyers = r.get("buyers") or []
 
-        head_token = f"${sym}" if sym else _short(addr)
-        head = f"#{i} {head_token}  (score {score:.1f})"
+    head_token = f"${sym}" if sym else _short(addr)
+    title = f"#{rank}  {head_token}"
 
-        value_lines = [
-            f"🤝 buyers: **{n_buyers}** / 📊 trades: BUY **{buy_trades}** / SELL {sell_trades}"
-            + (f" 🐋×{n_large}" if n_large else ""),
-            f"💰 buy 合計: {_fmt_sol(sum_sol)} SOL + {_fmt_usd(sum_stable)} stable",
-        ]
-        if mcap:
-            value_lines.append(f"📈 mcap: {_fmt_usd(float(mcap))}")
-        if first_ts and last_ts:
-            try:
-                first_dt = datetime.fromtimestamp(int(first_ts), tz=JST)
-                last_dt = datetime.fromtimestamp(int(last_ts), tz=JST)
-                value_lines.append(
-                    f"🕒 {first_dt.strftime('%H:%M')} → {last_dt.strftime('%H:%M')}"
-                )
-            except Exception:
-                pass
-        value_lines.append(f"👥 buyers: {sample}{more}")
+    desc_parts = [f"score **{score:.1f}**"]
+    if first_ts and last_ts:
+        try:
+            first_dt = datetime.fromtimestamp(int(first_ts), tz=JST)
+            last_dt = datetime.fromtimestamp(int(last_ts), tz=JST)
+            desc_parts.append(
+                f"🕒 {first_dt.strftime('%H:%M')}〜{last_dt.strftime('%H:%M')}"
+            )
+        except Exception:
+            pass
 
-        if addr:
-            value_lines.append(trade_links_md(addr, chain="solana"))
-            value_lines.append(f"`{addr}`")
+    embed = discord.Embed(
+        title=title,
+        description="  ·  ".join(desc_parts),
+        color=0xE91E63,
+    )
+    if isinstance(img, str) and img.startswith("http"):
+        embed.set_thumbnail(url=img)
 
-        embed.add_field(name=head, value="\n".join(value_lines), inline=False)
+    # 💵 SM buy
+    buy_value = (
+        f"{_fmt_usd(sum_value_usd)}  "
+        f"({_fmt_sol(sum_sol)} SOL + {_fmt_usd(sum_stable)} stable)"
+    )
+    embed.add_field(name="💵 SM buy", value=buy_value, inline=False)
 
-    embed.set_footer(text=f"score 上位 {len(rows)} 件 / Powered by Helius + Nansen SM roster")
+    # 👥 traders
+    sample = ", ".join(_short(b.get("wallet")) for b in buyers[:5])
+    more = f" +{len(buyers)-5}" if len(buyers) > 5 else ""
+    traders_lines = [f"BUY: **{n_buyers}**  ({sample}{more})"]
+    if n_sellers or sell_trades:
+        traders_lines.append(f"SELL: {n_sellers} wallet / {sell_trades} trades")
+    if n_large:
+        traders_lines.append(f"🐋 大口 BUY: ×{n_large}")
+    embed.add_field(name="👥 traders", value="\n".join(traders_lines), inline=False)
+
+    # 📈 mcap
+    if mcap:
+        embed.add_field(name="📈 mcap", value=_fmt_usd(float(mcap)), inline=False)
+
+    # 💬 CA (full)
+    if addr:
+        embed.add_field(name="💬 CA", value=f"`{addr}`", inline=False)
+
+        # 🔍 X Search
+        x_md = x_search_links_md(sym, addr)
+        if x_md:
+            embed.add_field(name="🔍 X Search", value=x_md, inline=False)
+
+        # 🤖 Grok
+        embed.add_field(
+            name="🤖 Grok",
+            value=grok_token_link_md(sym, addr),
+            inline=False,
+        )
+
+        # 🔗 Trade
+        embed.add_field(
+            name="🔗 Trade",
+            value=trade_links_md(addr, chain="solana"),
+            inline=False,
+        )
+
     return embed
 
 
