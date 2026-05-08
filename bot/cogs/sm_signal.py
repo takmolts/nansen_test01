@@ -193,6 +193,10 @@ class SmSignalCog(commands.Cog):
             return web.Response(status=400, text="bad shape")
 
         await self._refresh_wallets()
+        logger.info(
+            "[sm_signal] received %d events from %s (sm wallets cached: %d)",
+            len(events), request.remote, len(self._sm_wallets),
+        )
 
         for event in events:
             if not isinstance(event, dict):
@@ -236,7 +240,14 @@ class SmSignalCog(commands.Cog):
         involved = collect_involved_wallets(event)
         sm_involved = involved & self._sm_wallets
         if not sm_involved:
+            logger.debug(
+                "[sm_signal] no SM match: sig=%s involved=%d", sig, len(involved),
+            )
             return
+        logger.info(
+            "[sm_signal] SM match sig=%s wallets=%d",
+            sig, len(sm_involved),
+        )
 
         for wallet in sm_involved:
             net = wallet_net_by_mint(event, wallet)
@@ -280,6 +291,14 @@ class SmSignalCog(commands.Cog):
                 target_mint, direction, wallet, ts_f
             )
 
+            logger.info(
+                "[sm_signal] %s wallet=%s mint=%s %s%.4f%s large=%s others=%d",
+                direction, wallet[:8] + "…",
+                target_mint[:8] + "…",
+                "+" if cls["target_change"] > 0 else "",
+                cls["target_change"], "",
+                is_large, len(others),
+            )
             await self._post_signal(
                 event=event,
                 wallet=wallet,
