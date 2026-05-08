@@ -122,8 +122,11 @@ class SmRosterCog(commands.Cog):
         self._fetch_lock = asyncio.Lock()
         self._fetch_time: time = _parse_hhmm(config.sm_roster_fetch_time_jst)
 
-        if config.sm_roster_auto_enabled:
-            self._auto_task = bot.loop.create_task(self._daily_loop())
+    async def cog_load(self) -> None:
+        # discord.py 2.0+ では __init__ から bot.loop に触れないので
+        # async hook の cog_load でタスクを生成する。
+        if self.config.sm_roster_auto_enabled:
+            self._auto_task = asyncio.create_task(self._daily_loop())
             logger.info(
                 "sm_roster auto-loop 起動 (JST %02d:%02d)",
                 self._fetch_time.hour, self._fetch_time.minute,

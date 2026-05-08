@@ -111,19 +111,20 @@ class SmSignalCog(commands.Cog):
         self._site: web.TCPSite | None = None
         self._setup_task: asyncio.Task | None = None
 
-        self._setup_task = bot.loop.create_task(self._start_server())
+    async def cog_load(self) -> None:
+        # discord.py 2.0+ は __init__ から bot.loop に触れないので
+        # async cog_load でサーバ起動を予約する。
+        self._setup_task = asyncio.create_task(self._start_server())
         logger.info(
             "sm_signal: aiohttp サーバ起動を予約 (bind=%s:%d path=%s thread_id=%s)",
-            config.webhook_bind_host, config.webhook_bind_port, config.webhook_path,
-            config.sm_signal_thread_id,
+            self.config.webhook_bind_host, self.config.webhook_bind_port,
+            self.config.webhook_path, self.config.sm_signal_thread_id,
         )
 
-    def cog_unload(self) -> None:
+    async def cog_unload(self) -> None:
         if self._setup_task and not self._setup_task.done():
             self._setup_task.cancel()
-        # サーバ停止は async なので create_task で投げ捨て
-        if self._site or self._runner:
-            self.bot.loop.create_task(self._stop_server())
+        await self._stop_server()
 
     # ---- サーバ起動/停止 ----
 

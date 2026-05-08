@@ -89,12 +89,15 @@ class SmSummaryCog(commands.Cog):
         self._auto_task: asyncio.Task | None = None
         self._lock = asyncio.Lock()
 
-        if config.sm_summary_enabled:
-            self._auto_task = bot.loop.create_task(self._hourly_loop())
+    async def cog_load(self) -> None:
+        # discord.py 2.0+ では __init__ から bot.loop に触れないため、
+        # async hook の cog_load でタスク生成。
+        if self.config.sm_summary_enabled:
+            self._auto_task = asyncio.create_task(self._hourly_loop())
             logger.info(
                 "sm_summary auto-loop 起動 (window=%d 分 / min_wallets=%d / top=%d / channel=%s)",
-                config.sm_summary_window_min, config.sm_summary_min_wallets,
-                config.sm_summary_top_n, config.sm_summary_channel_id,
+                self.config.sm_summary_window_min, self.config.sm_summary_min_wallets,
+                self.config.sm_summary_top_n, self.config.sm_summary_channel_id,
             )
         else:
             logger.info("sm_summary auto-loop は DISABLED (SM_SUMMARY_ENABLED=false)")
