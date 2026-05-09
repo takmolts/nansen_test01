@@ -1,19 +1,72 @@
 # Nansen Discord Bot
 
-Solana ミームコインを **Nansen** + **Helius** + **DexScreener** で多角的に追跡する Discord bot。
+Solana ミームコインを **Nansen** + **Helius** + **DexScreener** で多角的に追跡する Discord bot。<br>
+機能としてはsolana以外も実装可能だが、今回は作りやすさとみやすさを優先してsolanaにフィーチャーとした。<br>
+詳細分析機能についてはsolana限定ではなく、プラットフォームによらずユーザーが今知りたいと思うデータを見る機能を目指した。<br>
+
+## コンセプト
+- コミュニティで行われている会話や議論を極力阻害せず、リアルタイム性の高い情報を通知する
+- Nansen以外のAPIは基本的に無料のものだけで構成することで実行コストを最低限とする
+- 情報の蓄積や詳細データなど、どうしてもデータ量が多くなるものは一時スレッドににがせるようにしておき（設定で変更も可能）、メンバーからみて情報で会話が埋もれるということを極力避けるようにする
+- NansenAPIで得られる豊富なデータをもとに、リアルタイム監視を行うためHeliusのウォレット通知webhookを活用。もととなるデータはNansenのsmartwalletsとすることで、データの信頼度を高める。
+- NansenのAPI自体のコストも意識し、必要なときに必要なぶんだけ消費を心がける。
+  - 定期実行タスクでの消費を抑えるため、機能のON/OFFをパラメータ化することで自由度をもたせる
+  - 採用された場合、コミュニテイの希望を受けて機能追加していく前提と考えており、コスト感を意識したミニマムスタートの構成としている。
+
 
 ## 機能概要
 
 大きく 4 系統:
 
-1. **`/analyze` (オンデマンド分析)**
+1. **`/analyze` (オンデマンド分析)**<br>
    ミーム CA を渡すと、 銘柄詳細 / Smart Money / Holders / Bundle 検出 / (オプション) ローカル LLM 総括 を Embed で返す。
-2. **`/digest` (時系列ダイジェスト)**
-   Nansen Token Screener から `momentum / sm / hot` の 3 観点で TOP token を Embed 投稿。 4h / 24h の自動 loop も持つ (デフォは無効)。
-3. **Smart Money 監視ロスター → Helius webhook**
+   - 各データはスコア化し、トップでグラフ表示することで見やすいよう意識して作成。
+   - 総括には有料のAIは使用せず、無料で実現できる範疇での実装とした（ローカルLLM）
+   - ローカル LLM による総括は実行環境に応じて有効/無効を切替可能 (`LLM_HOST` / `LLM_MODEL` を空にすれば skip)。 GPU が無い・推論コストを避けたい環境ではそのまま無効化。
+   - 結果を inline で返すかスレッドを作って投稿するかは `RESPONSE_MODE` で切替可能。 さらに `/analyze` 実行時の `thread:` 引数で個別にも上書きできる。
+   - analyzeコマンドに関してのみ、solana以外も対応可能
+2. **`/digest` (時系列ダイジェスト)**<br>
+   Nansen Token Screener から `momentum / sm / hot` の 3 観点で TOP token を Embed 投稿。
+   - 4h / 24h の自動 loop も設定可能としている (デフォは無効)。
+3. **Smart Money 監視ロスター → Helius webhook（任意）**<br>
    Nansen `/smart-money/dex-trades` を 1 日 1 回叩き、 Fund + 180D Smart Trader 等を `sm_roster` テーブルに蓄積 → Helius webhook に登録 → 該当 wallet の取引を **リアルタイムでスレッド通知**。
-4. **毎時集計通知**
-   蓄積された SM SWAP イベントを毎正時に集計し、 「群衆 ≥ 2 wallet が買った銘柄」 をスコア順に Embed リストで投稿 (Nansen クレジット消費なし)。
+   - smart wallet の検索条件 (label include/exclude、 token age、 trade_value_usd 下限、 per_page など) は `SM_ROSTER_*` env で変更可能。 しきい値を緩めれば wallet を採用しやすくでき、 厳しくすれば質の高いものだけに絞れる。
+   - roster は **最大 500 件で運用** し、 上限を超えた分は last_seen が古い順 / 未使用順から上書き prune される。 これは Helius webhook の登録 wallet 数や API 負荷を圧迫しすぎないため。
+   - SM のリアルタイム通知はかなり頻繁になるためスレッド (`SM_SIGNAL_THREAD_ID`) に逃している。 スレッド自体が煩わしければ `SM_SIGNAL_THREAD_ID` を空にして通知を無効化することも可能。 そのときも `sm_signal_events` への蓄積は続くため、 後段の「速報 BUY 通知」は問題なく機能する。
+4. **イベント駆動の速報 BUY 通知（任意）**<br>
+   sm_signal の BUY を見て、 <br>
+   ① 直近 N 分で SM ≥ M 人が同 mint を BUY (群衆ブレイク) または <br>
+   ② 単発で whale 閾値超えの BUY を検知すると、 <br>
+   `SM_SUMMARY_CHANNEL_ID` へ「🚨 速報 BUY」 Embed を投稿。 <br>
+   このEmbed にも `/analyze` 起動ボタンを付与しており、詳細をその場で調査することも可能としている。<br>
+   - 通知条件 (window / 群衆人数 / whale 閾値 / cooldown) は `SM_SUMMARY_REALTIME_*` env でまるごと変更可能にしてある。 「通知が多すぎる」 「条件が甘い/厳しい」 などをコミュニティで議論しながら現場で調整できるよう、 ハードコードしない方針。
+
+## Nansenコスト管理
+1. **`/analyze` (オンデマンド分析)**<br>
+   銘柄の詳細データを取得するため少し大きなコストがかかる<br>
+   コスト：1コール19クレジット<br>
+   頻度：任意<br>
+2. **`/digest` (時系列ダイジェスト)**<br>
+   3種類のコマンドを実行するだけなのでコストは低い。<br>
+   コスト：1コール3クレジット<br>
+   頻度：4h毎 / 24h毎 / （デフォルトは機能無効にしている）<br>
+3. **Smart Money 監視ロスター → Helius webhook**<br>
+   ウォレットを一括で取得することで1コールでの実装とした
+   コスト：1コール5クレジット<br>
+   頻度：一日に一度<br>
+4. **イベント駆動の速報 BUY 通知**<br>
+   ここではNansenのAPIは使用していないのでコスト0
+
+```
+[想定されるケース]
+銘柄詳細表示：10回コール=190
+digest定期実行有効：4h=6回=18 + 24h=1回=3 + α（任意実行）で30クレジット程度
+スマートウォレット取得= 5クレジット
+---------------------------------
+190 + 30 + 5 = 225クレジット / day
+225 * 30(day) = 6750クレジット / Month
+10000クレジットが10ドルなので、おおよそ1.5ヶ月で10ドル消費をイメージ（Pro版）
+```
 
 ## アーキテクチャ (SM 監視パイプライン)
 
@@ -27,11 +80,16 @@ Solana ミームコインを **Nansen** + **Helius** + **DexScreener** で多角
                                           ├─ classify_swap (sm_signal_classifier)
                                           ├─ 連発抑制 / 群衆検出 / 大口判定
                                           ├─ sm_signal_events テーブルに蓄積
-                                          └─ SM_SIGNAL_THREAD_ID に Embed 投稿
-
-毎正時 0 分:
-[sm_summary cog] ── sm_signal_events を集計 → SM_SUMMARY_CHANNEL_ID へ TOP_N
+                                          ├─ SM_SIGNAL_THREAD_ID に Embed 投稿
+                                          └─ BUY hook → sm_summary.notify_realtime
+                                                ├─ 群衆ブレイク or whale 単発を判定
+                                                ├─ mint 単位 cooldown (既定 60 分)
+                                                └─ SM_SUMMARY_CHANNEL_ID へ
+                                                   「🚨 速報 BUY」 Embed (+ /analyze ボタン)
 ```
+
+> 毎正時 0 分の集計通知 (`Smart Wallet Signal Summary`) は現状 Discord 投稿を停止中
+> (速報のみ運用)。 集計ロジック自体と `/sm-summary` コマンドはそのまま残してある。
 
 ## 前提
 
@@ -46,7 +104,7 @@ Solana ミームコインを **Nansen** + **Helius** + **DexScreener** で多角
 `.env` を用意すれば、 起動スクリプト [run.sh](run.sh) が `.venv` 作成 + 依存インストールを自動で行う。
 
 ```bash
-cd /home/tasato/develop_bb/nansen_test01
+cd /home/yourname/nansen_test01
 
 cp .env.example .env
 # .env を開いて DISCORD_BOT_TOKEN / NANSEN_API_KEY / 必要な ID を埋める
@@ -72,7 +130,7 @@ journalctl --user -u nansen-bot -f
 | `/sm-roster-fetch` | 今すぐ Nansen から SM wallet を取得して `sm_roster` に upsert |
 | `/sm-roster-list` | 蓄積済 roster を一覧表示 (sort 切替・Helius 未登録だけ表示など) |
 | `/sm-helius-sync` | `sm_roster` 全 wallet を Helius webhook に同期 (新規 POST or 更新 PUT) |
-| `/sm-summary` | 過去 N 分の SM SWAP を即集計して Embed リスト投稿 |
+| `/sm-summary` | 過去 N 分の SM SWAP を即集計 (現在 Discord 投稿は無効化中で ephemeral 応答のみ) |
 
 ## SM 監視パイプラインの始め方
 
@@ -81,7 +139,7 @@ journalctl --user -u nansen-bot -f
 3. bot 起動後、 Discord で `/sm-roster-fetch` 実行 (Nansen 1 call ≒ 5 credit)
 4. `/sm-helius-sync` で Helius に webhook 登録
 5. 実 SM の取引が発生すると `SM_SIGNAL_THREAD_ID` のスレッドにリアルタイム Embed
-6. 毎正時 0 分に `SM_SUMMARY_CHANNEL_ID` (空なら `DIGEST_CHANNEL_ID`) に集計通知
+6. 群衆ブレイク or whale 単発の BUY を検知すると `SM_SUMMARY_CHANNEL_ID` (空なら `DIGEST_CHANNEL_ID`) に「🚨 速報 BUY」 Embed (`/analyze` ボタン付き)
 
 ## .env の主な項目
 
@@ -148,15 +206,26 @@ journalctl --user -u nansen-bot -f
 | `SM_SIGNAL_DEDUP_WINDOW_MIN` | 30 | 連発抑制ウィンドウ |
 | `SM_SIGNAL_GROUP_WINDOW_MIN` | 30 | 群衆判定ウィンドウ |
 
-### SM Summary (毎時集計通知)
+### SM Summary (毎時集計 — 現在 Discord 投稿は停止中)
 
 | 変数 | 既定 | 内容 |
 |---|---|---|
-| `SM_SUMMARY_ENABLED` | true | 毎時 loop ON/OFF |
+| `SM_SUMMARY_ENABLED` | true | 毎時 loop の起動 ON/OFF (true でも投稿はスキップ、 集計ログのみ) |
 | `SM_SUMMARY_WINDOW_MIN` | 60 | 集計対象期間 |
 | `SM_SUMMARY_MIN_WALLETS` | 2 | 通知 gate (distinct buyers ≥ N) |
-| `SM_SUMMARY_TOP_N` | 10 | Embed 件数 (Discord 上限 10) |
-| `SM_SUMMARY_CHANNEL_ID` | - | 投稿先。 空で `DIGEST_CHANNEL_ID` フォールバック |
+| `SM_SUMMARY_TOP_N` | 10 | 集計対象 mint の上限 (Discord 上限 10) |
+| `SM_SUMMARY_CHANNEL_ID` | - | 速報の投稿先も兼用。 空で `DIGEST_CHANNEL_ID` フォールバック |
+
+### SM Summary 速報 (event 駆動 BUY 通知)
+
+| 変数 | 既定 | 内容 |
+|---|---|---|
+| `SM_SUMMARY_REALTIME_ENABLED` | true | 速報通知 ON/OFF |
+| `SM_SUMMARY_REALTIME_WINDOW_MIN` | 30 | 群衆ブレイク判定の窓 (分) |
+| `SM_SUMMARY_REALTIME_MIN_BUYERS` | 3 | 群衆ブレイクの distinct buyer 閾値 (今回の wallet を含む) |
+| `SM_SUMMARY_REALTIME_WHALE_SOL_MIN` | 20.0 | 単発 whale BUY 判定 (SOL、 sm_signal の 🐋 ラベルより厳しめ) |
+| `SM_SUMMARY_REALTIME_WHALE_STABLE_MIN` | 2000.0 | 単発 whale BUY 判定 (USD stable) |
+| `SM_SUMMARY_REALTIME_COOLDOWN_MIN` | 60 | 同 mint の再通知抑制期間 (分) |
 
 ### その他 (オプショナル)
 
@@ -203,7 +272,8 @@ curl -s http://localhost:50150/health
 | Nansen 4xx | `LOG_LEVEL=DEBUG` で payload を確認、 `bot/nansen_client.py` のリクエスト body を調整 |
 | Helius webhook が届かない | (1) `curl http://localhost:50150/health` (2) UFW で `WEBHOOK_BIND_PORT` 許可済か (3) NAT/DDNS で公開 URL 到達するか |
 | signal が来ているが Discord 投稿されない | `SM_SIGNAL_THREAD_ID` が正しい thread id か / bot に送信権限あるか |
-| 集計通知が空 | `SM_SUMMARY_MIN_WALLETS=2` の gate に達していない可能性。 `/sm-summary` で即時実行して確認 |
+| 速報 BUY が飛んでこない | (1) `SM_SUMMARY_CHANNEL_ID` (空なら `DIGEST_CHANNEL_ID`) が設定済か (2) `SM_SUMMARY_REALTIME_*` の閾値・cooldown が厳しすぎないか (3) ログで `[sm_summary:realtime]` を確認 |
+| 毎時集計通知が出ない | 現状仕様 (Discord 投稿は停止中、 速報のみ運用)。 復活させるなら `bot/cogs/sm_summary.py::_post_summary` のスキップ早期 return を外す |
 
 ## 検証スクリプト
 
