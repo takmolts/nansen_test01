@@ -582,8 +582,8 @@ def _build_signal_embed(
 
     desc_lines: list[str] = []
     if sym:
-        desc_lines.append(f"💲 ticker：**${sym}**")
-    desc_lines.append(f"💱 取引：**{flow_text}**")
+        desc_lines.append(f"🪙 ticker：**${sym}**")
+    desc_lines.append(f"♻️ 取引：**{flow_text}**")
     if token_info and token_info.market_cap:
         desc_lines.append(f"📈 mcap：{_fmt_usd(token_info.market_cap)}")
     desc_lines.append(f"💬 CA：`{target_mint}`")

@@ -103,6 +103,67 @@ class CheckCog(commands.Cog):
         )
 
 
+class AnalyzeButtonView(discord.ui.View):
+    """速報 BUY メッセージに付与する /analyze ショートカットボタン。
+
+    押下するとスレッドモード固定で詳細分析を実行する。
+    """
+
+    def __init__(self, *, ca: str, config: Config):
+        super().__init__(timeout=None)
+        self.ca = ca
+        self.config = config
+
+    @discord.ui.button(
+        label="🔬 analyze",
+        style=discord.ButtonStyle.primary,
+    )
+    async def analyze_button(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+        if (
+            self.config.allowed_channel_ids
+            and interaction.channel_id not in self.config.allowed_channel_ids
+        ):
+            await interaction.response.send_message(
+                "このチャネルではコマンドが許可されていません。",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.defer(thinking=True)
+
+        try:
+            result = await _run_analysis(
+                api_key=self.config.nansen_api_key,
+                base_url=self.config.nansen_base_url,
+                coingecko_api_key=(
+                    self.config.coingecko_api_key
+                    if self.config.coingecko_active
+                    else None
+                ),
+                token_address=self.ca,
+            )
+        except Exception:
+            logger.exception("速報 analyze ボタンで /analyze 実行失敗 ca=%s", self.ca)
+            await interaction.followup.send(
+                "想定外のエラーが発生しました。ログを確認してください。",
+                ephemeral=True,
+            )
+            return
+
+        embeds.set_credit_footer(result.embed_list, result.credits_used)
+
+        await _post_result(
+            interaction=interaction,
+            result=result,
+            token_address=self.ca,
+            response_mode=RESPONSE_MODE_THREAD,
+        )
+
+
 class _AnalysisResult:
     def __init__(
         self,

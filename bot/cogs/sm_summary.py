@@ -30,6 +30,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from bot.cogs.check import AnalyzeButtonView
 from bot.config import Config
 from bot.links import grok_token_link_md, trade_links_md, x_search_links_md
 from bot.token_info import TokenInfo, get_token_info, get_token_infos
@@ -217,32 +218,12 @@ class SmSummaryCog(commands.Cog):
     async def _post_summary(
         self, rows: list[dict], *, tag: str, window_min: int
     ) -> None:
-        ch_id = self.config.sm_summary_channel_id
-        if not ch_id:
-            logger.warning("[sm_summary] 投稿先未設定 → 通知スキップ")
-            return
-        channel = self.bot.get_channel(ch_id)
-        if channel is None:
-            try:
-                channel = await self.bot.fetch_channel(ch_id)
-            except Exception:
-                logger.exception("[sm_summary] channel fetch 失敗 id=%s", ch_id)
-                return
-        if not isinstance(channel, (discord.TextChannel, discord.Thread)):
-            logger.warning(
-                "[sm_summary] channel %s が TextChannel/Thread ではない (%s)",
-                ch_id, type(channel).__name__,
-            )
-            return
-
-        # ヘッダ + token ごとに 1 embed (Discord は 1 message に最大 10 embed)
-        rows = rows[:10]
-        header = _build_header_text(rows, window_min=window_min, tag=tag)
-        embeds = [_build_token_embed(r, rank=i + 1) for i, r in enumerate(rows)]
-        try:
-            await channel.send(content=header, embeds=embeds)
-        except Exception:
-            logger.exception("[sm_summary] 投稿失敗")
+        # Smart Wallet Signal Summary の集計通知は一旦無効化 (速報のみ運用)
+        logger.info(
+            "[sm_summary:%s] 集計通知は無効化中のため送信スキップ (rows=%d, window=%d 分)",
+            tag, len(rows), window_min,
+        )
+        return
 
     # ---- 速報 (sm_signal cog から呼ばれる) ----
 
@@ -329,8 +310,9 @@ class SmSummaryCog(commands.Cog):
             "[sm_summary:realtime] post mint=%s wallet=%s triggers=%s",
             target_mint, wallet[:8] + "…", ",".join(triggers) or "?",
         )
+        view = AnalyzeButtonView(ca=target_mint, config=self.config)
         try:
-            await channel.send(embed=embed)
+            await channel.send(embed=embed, view=view)
             self._realtime_cooldown[target_mint] = now
         except Exception:
             logger.exception(
@@ -369,7 +351,10 @@ class SmSummaryCog(commands.Cog):
                 ephemeral=True,
             )
             return
-        await interaction.followup.send("集計を投稿しました。")
+        await interaction.followup.send(
+            "集計通知は現在無効化されているため Discord には投稿していません (速報のみ運用中)。",
+            ephemeral=True,
+        )
 
 
 def _build_header_text(
@@ -421,7 +406,7 @@ def _build_token_embed(r: dict, *, rank: int) -> discord.Embed:
         except Exception:
             pass
     if sym:
-        desc_lines.append(f"💲 ticker：**${sym}**")
+        desc_lines.append(f"🪙 ticker：**${sym}**")
     desc_lines.append(
         f"💵 SM buy：**{_fmt_usd(sum_value_usd)}** "
         f"({_fmt_sol(sum_sol)} SOL + {_fmt_usd(sum_stable)} stable)"
@@ -516,52 +501,22 @@ def _build_realtime_embed(
         f"{_fmt_amount(abs(target_change))} {token_label}"
     )
 
-    nansen_url = f"https://app.nansen.ai/profiler/{wallet}?chain=solana"
-    solscan_wallet = f"https://solscan.io/account/{wallet}"
-    wallet_line = f"`{_short(wallet)}`"
-    if wallet_label:
-        wallet_line += f" **{wallet_label}**"
-    wallet_line += f" · [solscan]({solscan_wallet}) · [Nansen]({nansen_url})"
-
     desc_lines: list[str] = []
     if badge_text:
         desc_lines.append(badge_text)
-    if sym:
-        desc_lines.append(f"💲 ticker：**${sym}**")
-    desc_lines.append(f"💱 取引：**{flow_text}**")
+    desc_lines.append(f"♻️ 取引：**{flow_text}**")
     if token_info and token_info.market_cap:
         desc_lines.append(f"📈 mcap：{_fmt_usd(float(token_info.market_cap))}")
     desc_lines.append(
         f"👥 SM buyers：**{distinct_buyers}** 人 (直近 {window_min} 分)"
     )
-    desc_lines.append(f"👛 wallet：{wallet_line}")
     desc_lines.append(f"💬 CA：`{target_mint}`")
     x_md = x_search_links_md(sym, target_mint)
     if x_md:
         desc_lines.append(f"🔍 X：{x_md}")
     desc_lines.append(f"🤖 {grok_token_link_md(sym, target_mint)}")
     desc_lines.append(f"🔗 Trade：{trade_links_md(target_mint, chain='solana')}")
-    sig = event.get("signature") or ""
-    if sig:
-        sig_url = f"https://solscan.io/tx/{sig}"
-        desc_lines.append(f"📌 tx：[`{sig[:12]}…`]({sig_url})")
     embed.description = "\n".join(desc_lines)
-
-    if other_wallets:
-        items: list[str] = []
-        for w in list(other_wallets)[:5]:
-            short = _short(w)
-            lbl = other_wallets_labels.get(w)
-            items.append(f"{short} ({lbl})" if lbl else short)
-        sample = ", ".join(items)
-        more = (
-            f" ほか {len(other_wallets) - 5}" if len(other_wallets) > 5 else ""
-        )
-        embed.add_field(
-            name=f"🤝 直近 {window_min} 分の他 SM buyers ({len(other_wallets)})",
-            value=f"{sample}{more}",
-            inline=False,
-        )
 
     ts = event.get("timestamp")
     if isinstance(ts, (int, float)):
