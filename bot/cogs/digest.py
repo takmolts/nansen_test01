@@ -16,7 +16,7 @@ from discord.ext import commands, tasks
 
 from bot import archive_embeds
 from bot.config import Config
-from bot.digest_embeds import build_digest_message_groups
+from bot.digest_embeds import build_digest_summary_embed
 from bot.dexscreener_client import DexScreenerClient
 from bot.nansen_client import NansenClient
 from bot.wallet_db import WalletDB
@@ -124,13 +124,32 @@ class DigestCog(commands.Cog):
             )
             return
 
-        # 通常結果を返信
-        for embeds_in_msg in result.groups:
-            if embeds_in_msg:
-                await interaction.followup.send(embeds=embeds_in_msg)
-
-        # アーカイブスレッドにも追記
-        await self._post_to_archive(result, timeframe=tf, tag="manual")
+        # 通常結果は簡略 summary 1 embed を返信 (詳細は archive thread)
+        # 1) summary を URL なしで先に送る (応答性のため)
+        # 2) archive thread に詳細投稿 → ヘッダー Message を受け取る
+        # 3) summary embed の description を「この集計の詳細」 ジャンプリンクで更新
+        summary = build_digest_summary_embed(
+            momentum_resp=result.momentum_resp,
+            sm_resp=result.sm_resp,
+            danger_resp=result.danger_resp,
+            credits_used=result.credits_used,
+            timeframe=tf,
+        )
+        summary_msg = await interaction.followup.send(embed=summary, wait=True)
+        header_msg = await self._post_to_archive(result, timeframe=tf, tag="manual")
+        if header_msg and summary_msg is not None:
+            try:
+                updated = build_digest_summary_embed(
+                    momentum_resp=result.momentum_resp,
+                    sm_resp=result.sm_resp,
+                    danger_resp=result.danger_resp,
+                    credits_used=result.credits_used,
+                    timeframe=tf,
+                    archive_jump_url=header_msg.jump_url,
+                )
+                await summary_msg.edit(embed=updated)
+            except Exception:
+                logger.exception("[manual] summary に jump_url を埋め込む edit 失敗")
 
         # wallet DB 蓄積
         await self._accumulate_wallets(
@@ -245,10 +264,28 @@ class DigestCog(commands.Cog):
                 base_url=self.config.nansen_base_url,
                 timeframe=timeframe,
             )
-            for embeds_in_msg in result.groups:
-                if embeds_in_msg:
-                    await channel.send(embeds=embeds_in_msg)
-            await self._post_to_archive(result, timeframe=timeframe, tag=tag)
+            summary = build_digest_summary_embed(
+                momentum_resp=result.momentum_resp,
+                sm_resp=result.sm_resp,
+                danger_resp=result.danger_resp,
+                credits_used=result.credits_used,
+                timeframe=timeframe,
+            )
+            summary_msg = await channel.send(embed=summary)
+            header_msg = await self._post_to_archive(result, timeframe=timeframe, tag=tag)
+            if header_msg:
+                try:
+                    updated = build_digest_summary_embed(
+                        momentum_resp=result.momentum_resp,
+                        sm_resp=result.sm_resp,
+                        danger_resp=result.danger_resp,
+                        credits_used=result.credits_used,
+                        timeframe=timeframe,
+                        archive_jump_url=header_msg.jump_url,
+                    )
+                    await summary_msg.edit(embed=updated)
+                except Exception:
+                    logger.exception("[%s] summary に jump_url を埋め込む edit 失敗", tag)
             await self._accumulate_wallets(
                 api_key=self.config.nansen_api_key,
                 base_url=self.config.nansen_base_url,
@@ -343,23 +380,28 @@ class DigestCog(commands.Cog):
         *,
         timeframe: str,
         tag: str,
-    ) -> None:
+    ) -> discord.Message | None:
+        """archive thread に区切りヘッダー + 各 token Embed を投稿し、 ヘッダー Message を返す。
+
+        ヘッダー Message の `jump_url` を summary 側にぶら下げて 「この集計の詳細」 へ
+        ジャンプできるようにするための返り値。 投稿失敗 / thread 無設定なら None。
+        """
         thread_id = self.config.digest_archive_thread_id
         if not thread_id:
-            return
+            return None
         thread = self.bot.get_channel(thread_id)
         if thread is None:
             try:
                 thread = await self.bot.fetch_channel(thread_id)
             except Exception:
                 logger.exception("[%s] DIGEST_ARCHIVE_THREAD_ID=%s の取得失敗", tag, thread_id)
-                return
+                return None
         if not isinstance(thread, discord.Thread):
             logger.warning(
                 "[%s] DIGEST_ARCHIVE_THREAD_ID=%s は Thread ではない (%s)",
                 tag, thread_id, type(thread).__name__,
             )
-            return
+            return None
 
         # 区切りヘッダー (集計時刻 + timeframe)
         now_jst = datetime.now(JST)
@@ -368,8 +410,9 @@ class DigestCog(commands.Cog):
             f"📅 **[{now_jst.strftime('%Y-%m-%d %H:%M')} JST] 集計データ** "
             f"(timeframe=`{timeframe}`)"
         )
+        header_msg: discord.Message | None = None
         try:
-            await thread.send(header)
+            header_msg = await thread.send(header)
         except Exception:
             logger.exception("[%s] archive ヘッダー投稿失敗", tag)
 
@@ -396,21 +439,29 @@ class DigestCog(commands.Cog):
                         tag, category, addr,
                     )
 
+        return header_msg
+
 
 class _DigestResult:
     def __init__(
         self,
-        groups: list[list[discord.Embed]],
+        momentum_resp,
+        sm_resp,
+        danger_resp,
         momentum_data: list[dict],
         sm_data: list[dict],
         hot_data: list[dict],
         dex_lookup: dict[str, dict | None],
+        credits_used: int,
     ):
-        self.groups = groups
+        self.momentum_resp = momentum_resp
+        self.sm_resp = sm_resp
+        self.danger_resp = danger_resp
         self.momentum_data = momentum_data
         self.sm_data = sm_data
         self.hot_data = hot_data
         self.dex_lookup = dex_lookup
+        self.credits_used = credits_used
 
 
 async def _build_digest(
@@ -450,24 +501,16 @@ async def _build_digest(
 
     addresses = _collect_addresses(momentum_r, sm_r, danger_sorted)
     dex_lookup = await _fetch_dex_lookup(addresses)
-    image_urls = {k: (v.get("info", {}).get("imageUrl") if isinstance(v, dict) else None)
-                  for k, v in dex_lookup.items()}
 
-    groups = build_digest_message_groups(
+    return _DigestResult(
         momentum_resp=momentum_r,
         sm_resp=sm_r,
         danger_resp=danger_sorted,
-        image_urls=image_urls,
-        credits_used=credits_used,
-        timeframe=timeframe,
-    )
-
-    return _DigestResult(
-        groups=groups,
         momentum_data=_extract_top(momentum_r, 5),
         sm_data=_extract_top(sm_r, 5),
         hot_data=_extract_top(danger_sorted, 5),
         dex_lookup=dex_lookup,
+        credits_used=credits_used,
     )
 
 

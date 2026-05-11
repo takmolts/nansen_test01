@@ -1,10 +1,8 @@
-"""/digest コマンド用の Embed 生成。
+"""/digest コマンド用の簡略 Embed 生成。
 
-各カテゴリ (出来高 / SM / 急流入) ごとに 1 メッセージ分の Embed リストを返す:
-  [カテゴリ見出し Embed, トークン1 Embed, ..., トークン5 Embed]
-
-各トークン Embed は thumbnail にアイコン画像を持ち、 title が ranking、
-description にメトリクスと CA / X Search / Trade リンクが入る。
+DIGEST_CHANNEL_ID へは 3 カテゴリ (出来高 / SM / 急流入) の TOP5 を
+1 つの Embed に 3 fields でまとめた compact 版を投稿する。
+詳細な per-token Embed は archive thread 側 (bot/archive_embeds.py) で生成する。
 """
 from __future__ import annotations
 
@@ -13,186 +11,103 @@ from typing import Any, Callable
 
 import discord
 
-from bot.links import grok_token_link_md, trade_links_md, x_search_links_md
-
 COLOR_MOMENTUM = 0xFF8C00
-COLOR_SM = 0x4B9CD3
-COLOR_HOT = 0x9370DB
-COLOR_ERROR = 0x808080
 
 ROWS_PER_EMBED = 5  # カテゴリ毎の表示件数
 
 
-def build_digest_message_groups(
+def build_digest_summary_embed(
     *,
     momentum_resp: Any,
     sm_resp: Any,
     danger_resp: Any,
-    image_urls: dict[str, str | None],
     credits_used: int,
     timeframe: str = "24h",
-) -> list[list[discord.Embed]]:
-    """カテゴリ毎の Embed リスト 3 つを返す。 各リストは 1 メッセージとして送る想定。"""
-    groups = [
-        _build_category(
-            title=f"🔥 出来高急増ミーム ({timeframe}, age ≤ 30d)",
-            description=f"出来高 (`volume`) 上位 {ROWS_PER_EMBED} 件。 直近 {timeframe} で資金が集まっているトークン。",
-            color=COLOR_MOMENTUM,
-            data=_extract_data(momentum_resp),
-            row_formatter=_format_row_momentum,
-            image_urls=image_urls,
-            error=_err_msg(momentum_resp),
-        ),
-        _build_category(
-            title=f"🧠 Smart Money 買い集めランキング ({timeframe})",
-            description=f"SM の買い額 (`buy_volume`) 上位 {ROWS_PER_EMBED} 件。 直近 {timeframe} でプロが買っているトークン。",
-            color=COLOR_SM,
-            data=_extract_data(sm_resp),
-            row_formatter=_format_row_sm,
-            image_urls=image_urls,
-            error=_err_msg(sm_resp),
-        ),
-        _build_category(
-            title=f"⚡ 急流入トークン ({timeframe}, age ≤ 7d, FDV比 流入大)",
-            description=(
-                "新規 7 日以内 × `inflow_fdv_ratio` 上位。 \n"
-                "SM / インサイダー早期流入の可能性、 一方で短期ポンプの典型でもある両刃シグナル。 "
-                "入るならエントリー早く、 出口を意識して。"
-            ),
-            color=COLOR_HOT,
-            data=_extract_data(danger_resp),
-            row_formatter=_format_row_danger,
-            image_urls=image_urls,
-            error=_err_msg(danger_resp),
-        ),
-    ]
+    archive_jump_url: str | None = None,
+) -> discord.Embed:
+    """3 カテゴリの TOP5 を 1 つの Embed (3 fields) にまとめた簡略版を返す。
 
-    # 最後のグループの最後の embed のフッタに集計時刻と消費クレジット
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    footer_text = f"消費クレジット: {credits_used}(目安) | 集計: {now} | timeframe: {timeframe}"
-    if groups[-1]:
-        groups[-1][-1].set_footer(text=footer_text)
+    ・ 各行は 1 line で symbol が DexScreener ハイパーリンク
+    ・ 詳細は archive thread の **その集計のヘッダーメッセージ** にジャンプリンク
+      (`archive_jump_url`)。 archive thread が無い場合は description 空。
+    """
+    embed = discord.Embed(
+        title=f"📊 Digest ({timeframe})",
+        color=COLOR_MOMENTUM,
+    )
+    if archive_jump_url:
+        embed.description = f"[📂 この集計の詳細を見る]({archive_jump_url})"
 
-    return groups
-
-
-def _build_category(
-    *,
-    title: str,
-    description: str,
-    color: int,
-    data: list[dict[str, Any]],
-    row_formatter: Callable[[int, dict], tuple[str, str]],
-    image_urls: dict[str, str | None],
-    error: str | None,
-) -> list[discord.Embed]:
-    """カテゴリ見出し + 各トークンの Embed リストを返す。"""
-    if error is not None:
-        head = discord.Embed(
-            title=title,
-            description=f"取得に失敗: `{error}`",
-            color=COLOR_ERROR,
-        )
-        return [head]
-
-    head = discord.Embed(
-        title=title,
-        description=description,
-        color=color,
+    embed.add_field(
+        name=f"🔥 出来高急増ミーム ({timeframe}, age ≤ 30d)",
+        value=_summary_lines(momentum_resp, _format_summary_momentum),
+        inline=False,
+    )
+    embed.add_field(
+        name=f"🧠 Smart Money 買い集め ({timeframe})",
+        value=_summary_lines(sm_resp, _format_summary_sm),
+        inline=False,
+    )
+    embed.add_field(
+        name=f"⚡ 急流入 ({timeframe}, age ≤ 7d)",
+        value=_summary_lines(danger_resp, _format_summary_danger),
+        inline=False,
     )
 
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    embed.set_footer(
+        text=f"消費クレジット: {credits_used}(目安) | 集計: {now} | timeframe: {timeframe}"
+    )
+    return embed
+
+
+def _summary_lines(
+    resp: Any,
+    formatter: Callable[[int, dict], str],
+) -> str:
+    """カテゴリ 1 つぶんの compact 行文字列を返す。 取得失敗 / 空 にも対応。"""
+    err = _err_msg(resp)
+    if err is not None:
+        return f"取得失敗: `{err}`"
+    data = _extract_data(resp)
     if not data:
-        head.description = f"{description}\n\n*該当トークンなし*"
-        return [head]
-
-    out = [head]
-    for i, t in enumerate(data[:ROWS_PER_EMBED], start=1):
-        embed_title, body = row_formatter(i, t)
-        addr = t.get("token_address") or ""
-        embed = discord.Embed(
-            title=embed_title,
-            description=body,
-            color=color,
-        )
-        img = image_urls.get(addr.lower()) if addr else None
-        if img:
-            embed.set_thumbnail(url=img)
-        out.append(embed)
-    return out
+        return "*該当トークンなし*"
+    lines = [formatter(i + 1, t) for i, t in enumerate(data[:ROWS_PER_EMBED])]
+    return "\n".join(lines)
 
 
-# ----- 行フォーマッタ: (title, body) を返す -----
-
-def _format_row_momentum(rank: int, t: dict[str, Any]) -> tuple[str, str]:
+def _summary_symbol_link(t: dict[str, Any]) -> str:
     sym = (t.get("token_symbol") or "?").upper()
     addr = t.get("token_address") or ""
+    if addr:
+        return f"[**${sym}**](https://dexscreener.com/solana/{addr})"
+    return f"**${sym}**"
+
+
+def _format_summary_momentum(rank: int, t: dict[str, Any]) -> str:
     vol = _fmt_usd(t.get("volume"))
     pc = t.get("price_change")
     pc_str = _fmt_pct_signed(pc) if pc is not None else "?"
     mcap = _fmt_usd(t.get("market_cap_usd"))
-    age = _fmt_age_value(t.get("token_age_days"))
-
-    metrics = [
-        f"🪙 mcap: {mcap}",
-        f"⚡ vol: {vol} ({pc_str})",
-        f"🕒 age: {age}",
-    ]
-    return _compose_row(rank, sym, addr, metrics)
+    return f"`{rank}.` {_summary_symbol_link(t)} — vol {vol} ({pc_str}) · mcap {mcap}"
 
 
-def _format_row_sm(rank: int, t: dict[str, Any]) -> tuple[str, str]:
-    sym = (t.get("token_symbol") or "?").upper()
-    addr = t.get("token_address") or ""
+def _format_summary_sm(rank: int, t: dict[str, Any]) -> str:
     bv = _fmt_usd(t.get("buy_volume"))
-    mcap = _fmt_usd(t.get("market_cap_usd"))
     nb = _trader_count(t)
-
-    metrics = [f"💵 SM buy: {bv}"]
-    if nb is not None:
-        metrics.append(f"👥 traders: {nb}")
-    metrics.append(f"🪙 mcap: {mcap}")
-    return _compose_row(rank, sym, addr, metrics)
+    mcap = _fmt_usd(t.get("market_cap_usd"))
+    nb_str = f"{nb} traders · " if nb is not None else ""
+    return f"`{rank}.` {_summary_symbol_link(t)} — SM buy {bv} · {nb_str}mcap {mcap}"
 
 
-def _format_row_danger(rank: int, t: dict[str, Any]) -> tuple[str, str]:
-    sym = (t.get("token_symbol") or "?").upper()
-    addr = t.get("token_address") or ""
-    age = _fmt_age_value(t.get("token_age_days"))
+def _format_summary_danger(rank: int, t: dict[str, Any]) -> str:
     ratio = t.get("inflow_fdv_ratio")
     ratio_str = f"{ratio:.2f}x" if isinstance(ratio, (int, float)) else "?"
     fdv = _fmt_usd(t.get("fdv"))
     nb = _trader_count(t)
-
-    metrics = [
-        f"🕒 age: {age}",
-        f"💧 inflow/FDV: {ratio_str}",
-        f"💎 fdv: {fdv}",
-    ]
-    if nb is not None:
-        metrics.append(f"👥 traders: {nb}")
-    return _compose_row(rank, sym, addr, metrics)
-
-
-def _compose_row(rank: int, sym: str, addr: str, metrics: list[str]) -> tuple[str, str]:
-    title = f"{rank}. ${sym}"
-    body = "\n".join(metrics + [_link_block(addr, sym)])
-    return title, body
-
-
-def _link_block(addr: str, symbol: str | None = None) -> str:
-    if not addr:
-        return "(no address)"
-    sym = symbol if symbol and symbol != "?" else None
-    trade = trade_links_md(addr, chain="solana")
-    x = x_search_links_md(sym, addr)
-    grok = grok_token_link_md(sym, addr)
-    lines = [f"💬 CA: `{addr}`"]
-    if x:
-        lines.append(f"🐦 X Search: {x}")
-    if grok:
-        lines.append(f"🤖 Grok: {grok}")
-    lines.append(f"🔗 Trade: {trade}")
-    return "\n".join(lines)
+    nb_str = f" · {nb} traders" if nb is not None else ""
+    age = _fmt_age_value(t.get("token_age_days"))
+    return f"`{rank}.` {_summary_symbol_link(t)} — inflow/FDV {ratio_str} · fdv {fdv} · age {age}{nb_str}"
 
 
 def _trader_count(t: dict[str, Any]) -> int | None:
