@@ -62,6 +62,15 @@ class Config:
     sm_summary_realtime_whale_sol_min: float
     sm_summary_realtime_whale_stable_min: float
     sm_summary_realtime_cooldown_min: int
+    dashboard_publish_enabled: bool
+    dashboard_repo_path: str | None
+    dashboard_publish_interval_min: int
+    dashboard_git_branch: str
+    dashboard_min_distinct_buyers: int
+    dashboard_top_n: int
+    dashboard_buyers_per_token: int
+    dashboard_enrich: bool
+    dashboard_public_url: str | None
     allowed_channel_ids: frozenset[int]
     dev_guild_id: int | None
     response_mode: str
@@ -248,6 +257,20 @@ class Config:
             "SM_SUMMARY_REALTIME_COOLDOWN_MIN", 60
         )
 
+        dashboard_publish_enabled = _parse_bool(
+            os.getenv("DASHBOARD_PUBLISH_ENABLED"), default=False
+        )
+        dashboard_repo_path = os.getenv("DASHBOARD_REPO_PATH", "").strip() or None
+        dashboard_publish_interval_min = _int_env("DASHBOARD_PUBLISH_INTERVAL_MIN", 5)
+        dashboard_git_branch = (
+            os.getenv("DASHBOARD_GIT_BRANCH", "main").strip() or "main"
+        )
+        dashboard_min_distinct_buyers = _int_env("DASHBOARD_MIN_DISTINCT_BUYERS", 2)
+        dashboard_top_n = _int_env("DASHBOARD_TOP_N", 50)
+        dashboard_buyers_per_token = _int_env("DASHBOARD_BUYERS_PER_TOKEN", 30)
+        dashboard_enrich = _parse_bool(os.getenv("DASHBOARD_ENRICH"), default=True)
+        dashboard_public_url = os.getenv("DASHBOARD_PUBLIC_URL", "").strip() or None
+
         raw_channels = os.getenv("ALLOWED_CHANNEL_IDS", "").strip()
         channels: frozenset[int] = frozenset()
         if raw_channels:
@@ -315,6 +338,15 @@ class Config:
             sm_summary_realtime_whale_sol_min=sm_summary_realtime_whale_sol_min,
             sm_summary_realtime_whale_stable_min=sm_summary_realtime_whale_stable_min,
             sm_summary_realtime_cooldown_min=sm_summary_realtime_cooldown_min,
+            dashboard_publish_enabled=dashboard_publish_enabled,
+            dashboard_repo_path=dashboard_repo_path,
+            dashboard_publish_interval_min=dashboard_publish_interval_min,
+            dashboard_git_branch=dashboard_git_branch,
+            dashboard_min_distinct_buyers=dashboard_min_distinct_buyers,
+            dashboard_top_n=dashboard_top_n,
+            dashboard_buyers_per_token=dashboard_buyers_per_token,
+            dashboard_enrich=dashboard_enrich,
+            dashboard_public_url=dashboard_public_url,
             allowed_channel_ids=channels,
             dev_guild_id=dev_guild_id,
             response_mode=raw_mode,

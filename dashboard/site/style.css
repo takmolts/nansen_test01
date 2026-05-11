@@ -1,0 +1,331 @@
+:root {
+  --bg: #0e1014;
+  --bg-2: #161a21;
+  --bg-3: #1d232c;
+  --border: #262d38;
+  --text: #e6e8eb;
+  --muted: #8a93a3;
+  --accent: #4ea1ff;
+  --accent-2: #1f2937;
+  --buy: #2ecc71;
+  --sell: #ff5d6c;
+  --warn: #ffbf47;
+  --list-w: 420px;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Hiragino Sans", "Noto Sans JP", sans-serif;
+  font-size: 14px;
+  height: 100%;
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+}
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  background: var(--bg-2);
+  border-bottom: 1px solid var(--border);
+}
+.title { display: flex; align-items: center; gap: 10px; }
+.title h1 { font-size: 16px; margin: 0; font-weight: 600; }
+.title .emoji { font-size: 20px; }
+.meta { color: var(--muted); font-size: 12px; }
+.meta .sep { margin: 0 6px; }
+
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 16px;
+  background: var(--bg-2);
+  border-bottom: 1px solid var(--border);
+}
+.control-group { display: flex; align-items: center; gap: 6px; }
+.control-group.grow { flex: 1; min-width: 200px; }
+.control-group label { color: var(--muted); font-size: 12px; }
+
+.tab {
+  background: var(--bg-3);
+  color: var(--text);
+  border: 1px solid var(--border);
+  padding: 4px 12px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.tab + .tab { border-left: none; }
+.tab:first-child { border-radius: 6px 0 0 6px; }
+.tab:last-child { border-radius: 0 6px 6px 0; }
+.tab.active {
+  background: var(--accent);
+  color: #000;
+  border-color: var(--accent);
+}
+
+select, input[type=number], input[type=search] {
+  background: var(--bg-3);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-size: 13px;
+}
+input[type=search] { width: 100%; }
+input[type=number] { width: 60px; }
+
+.layout {
+  flex: 1;
+  display: grid;
+  grid-template-columns: var(--list-w) 6px 1fr;
+  overflow: hidden;
+  min-height: 0;
+}
+
+.list-pane {
+  overflow-y: auto;
+  background: var(--bg);
+}
+
+.resizer {
+  background: var(--border);
+  cursor: col-resize;
+  user-select: none;
+  transition: background 0.12s;
+  position: relative;
+}
+.resizer::after {
+  /* タップ/クリック判定を少し広げる視覚的なグリップ */
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 2px;
+  height: 36px;
+  background: var(--muted);
+  border-radius: 2px;
+  opacity: 0.4;
+}
+.resizer:hover,
+.resizer.dragging { background: var(--accent); }
+.resizer:hover::after,
+.resizer.dragging::after { opacity: 0.9; background: #000; }
+.token-list { list-style: none; margin: 0; padding: 0; }
+.token-list li {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  display: grid;
+  grid-template-columns: 32px 1fr auto;
+  gap: 10px;
+  align-items: center;
+}
+.token-list li:hover { background: var(--bg-2); }
+.token-list li.selected { background: var(--accent-2); }
+.token-list .icon {
+  width: 32px; height: 32px;
+  border-radius: 50%;
+  background: var(--bg-3);
+  object-fit: cover;
+}
+.token-list .info { min-width: 0; }
+.token-list .symbol-row {
+  display: flex; align-items: baseline; gap: 8px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.token-list .sym { font-weight: 600; font-size: 14px; }
+.token-list .name { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; }
+.token-list .stats {
+  display: flex; gap: 10px; margin-top: 3px;
+  color: var(--muted); font-size: 12px;
+}
+.token-list .stats .buy { color: var(--buy); }
+.token-list .stats .warn { color: var(--warn); }
+.token-list .right {
+  text-align: right;
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.token-list .right .big {
+  display: block;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.empty-msg { color: var(--muted); padding: 20px; text-align: center; }
+
+.chart-pane { display: flex; flex-direction: column; overflow: hidden; }
+.chart-empty {
+  margin: auto;
+  color: var(--muted);
+  font-size: 13px;
+}
+.chart-detail { display: flex; flex-direction: column; height: 100%; overflow: hidden; }
+
+.chart-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-2);
+  flex-wrap: wrap;
+}
+.back-btn {
+  display: none;
+  background: var(--bg-3);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 10px;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  margin-right: 4px;
+}
+.back-btn:hover { background: var(--accent-2); }
+
+.chart-title { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.chart-title img {
+  width: 32px; height: 32px; border-radius: 50%;
+  background: var(--bg-3);
+}
+.chart-title .symbol { font-size: 16px; font-weight: 700; margin-right: 6px; }
+.chart-title .name { color: var(--muted); font-size: 12px; }
+.chart-title .line-2 {
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  margin-top: 2px;
+}
+
+.chart-source { display: flex; align-items: center; gap: 6px; }
+.src-btn {
+  background: var(--bg-3); color: var(--text);
+  border: 1px solid var(--border); border-radius: 4px;
+  padding: 4px 10px; font-size: 12px; cursor: pointer;
+}
+.src-btn.active { background: var(--accent); color: #000; border-color: var(--accent); }
+.open-ext { font-size: 12px; margin-left: 8px; }
+
+.iframe-wrap {
+  flex: 1;
+  min-height: 320px;
+  background: #000;
+}
+.iframe-wrap iframe {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  display: block;
+}
+
+.buyers {
+  border-top: 1px solid var(--border);
+  background: var(--bg-2);
+  padding: 8px 16px 12px;
+  max-height: 30vh;
+  overflow-y: auto;
+}
+.buyers h3 { margin: 4px 0 6px; font-size: 13px; color: var(--muted); font-weight: 500; }
+.buyers ul { list-style: none; margin: 0; padding: 0; }
+
+.buyers-header,
+.buyers li {
+  display: grid;
+  grid-template-columns:
+    minmax(90px, auto)   /* ウォレット */
+    minmax(60px, 1fr)    /* ラベル */
+    44px                  /* 取引数 */
+    minmax(70px, auto)   /* 合計 */
+    minmax(95px, auto);  /* 最終 */
+  gap: 10px;
+  align-items: baseline;
+}
+.buyers-header {
+  padding: 4px 0;
+  font-size: 10px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  background: var(--bg-2);
+}
+.buyers-header .num { text-align: right; }
+
+.buyers li {
+  padding: 4px 0;
+  font-size: 12px;
+  border-bottom: 1px dashed var(--border);
+  font-variant-numeric: tabular-nums;
+}
+.buyers .wallet { font-family: monospace; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.buyers .label-cell { color: var(--warn); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.buyers .label-cell.empty { color: var(--border); }
+.buyers .trades { text-align: right; color: var(--text); }
+.buyers .amount { color: var(--buy); text-align: right; white-space: nowrap; }
+.buyers .ts { color: var(--muted); text-align: right; white-space: nowrap; }
+.buyers .ts .abs { color: var(--text); }
+.buyers .ts .ago { color: var(--muted); margin-left: 6px; font-size: 11px; }
+
+/* === モバイル: 一覧と詳細を「画面切替」で見せる (左右 2 ペイン不可) === */
+@media (max-width: 800px) {
+  .topbar { padding: 8px 10px; }
+  .title h1 { font-size: 14px; }
+  .controls { padding: 8px 10px; gap: 8px; }
+  .control-group.grow { width: 100%; order: 99; }
+  input[type=number] { width: 50px; }
+
+  .layout {
+    grid-template-columns: 1fr;
+    position: relative;
+  }
+  .resizer { display: none; }
+
+  /* 詳細ペインはフルスクリーンに被せる形 */
+  .chart-pane {
+    position: fixed;
+    inset: 0;
+    z-index: 100;
+    background: var(--bg);
+    transform: translateX(100%);
+    transition: transform 0.2s ease;
+    visibility: hidden;
+  }
+  body.show-detail .chart-pane {
+    transform: translateX(0);
+    visibility: visible;
+  }
+  body.show-detail { overflow: hidden; }
+
+  .back-btn { display: inline-block; }
+  .chart-header { padding: 8px 10px; }
+  .chart-source { gap: 4px; flex-wrap: wrap; }
+  .src-btn { padding: 4px 8px; font-size: 11px; }
+  .open-ext { font-size: 11px; margin-left: 4px; }
+  .chart-title .symbol { font-size: 14px; }
+  .iframe-wrap { min-height: 320px; }
+  .buyers { max-height: 35vh; }
+}

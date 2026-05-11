@@ -113,6 +113,18 @@ class AnalyzeButtonView(discord.ui.View):
         super().__init__(timeout=None)
         self.ca = ca
         self.config = config
+        # ダッシュボード URL が設定されていれば、 mint をクエリに乗せて Link ボタンを追加
+        dash_url = (config.dashboard_public_url or "").strip()
+        if dash_url:
+            sep = "&" if "?" in dash_url else "?"
+            url = f"{dash_url}{sep}mint={ca}"
+            self.add_item(
+                discord.ui.Button(
+                    style=discord.ButtonStyle.link,
+                    label="📊 dashboard",
+                    url=url,
+                )
+            )
 
     @discord.ui.button(
         label="🔬 analyze",
