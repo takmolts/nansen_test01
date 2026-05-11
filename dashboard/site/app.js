@@ -36,6 +36,9 @@ const els = {
   srcBtns: document.querySelectorAll(".src-btn"),
   resizer: document.getElementById("resizer"),
   backBtn: document.getElementById("back-btn"),
+  copyCaBtn: document.getElementById("copy-ca-btn"),
+  snapshotBtn: document.getElementById("snapshot-btn"),
+  toast: document.getElementById("toast"),
 };
 
 const MOBILE_BP = 800;
@@ -318,6 +321,91 @@ els.tabs.forEach((btn) => {
 if (els.backBtn) {
   els.backBtn.addEventListener("click", () => {
     document.body.classList.remove("show-detail");
+  });
+}
+
+// --- Action buttons (copy CA / snapshot) ---
+
+let _toastTimer = null;
+
+function showToast(msg, kind = "ok") {
+  if (!els.toast) return;
+  els.toast.textContent = msg;
+  els.toast.classList.toggle("error", kind === "error");
+  els.toast.hidden = false;
+  // 強制 reflow → transition で fade-in
+  void els.toast.offsetWidth;
+  els.toast.classList.add("show");
+  if (_toastTimer) clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => {
+    els.toast.classList.remove("show");
+    setTimeout(() => { els.toast.hidden = true; }, 250);
+  }, 1800);
+}
+
+async function copyText(text) {
+  if (!text) return false;
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch (e) { /* fallthrough */ }
+  // フォールバック (HTTPS / 古いブラウザ向け)
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand("copy");
+    document.body.removeChild(ta);
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
+function buildSnapshotMarkdown(t) {
+  const sym = t.symbol || shortAddr(t.mint);
+  const name = t.name || "";
+  const lines = [];
+  lines.push(`**$${sym}** ${name ? `(${name})` : ""}`.trim());
+  lines.push(`Mint: \`${t.mint}\``);
+  const meta = [];
+  if (t.market_cap != null) meta.push(`MCap: $${fmtNum(t.market_cap)}`);
+  if (t.price_usd != null) meta.push(`Px: $${fmtNum(t.price_usd, 6)}`);
+  meta.push(`last ${fmtAgo(t.last_seen_ts)}`);
+  if (meta.length) lines.push(meta.join(" · "));
+  lines.push(
+    `BUY: ${t.buy_trades}txn / ${t.distinct_buyers}wallets · ` +
+    `SOL ${fmtNum(t.sum_buy_sol)} / $${fmtNum(t.sum_buy_stable)}` +
+    (t.n_large_buys ? ` · 🐋 ${t.n_large_buys}` : "")
+  );
+  lines.push("");
+  lines.push(`https://dexscreener.com/solana/${t.mint}`);
+  return lines.join("\n");
+}
+
+if (els.copyCaBtn) {
+  els.copyCaBtn.addEventListener("click", async () => {
+    if (!state.selectedMint) return;
+    const ok = await copyText(state.selectedMint);
+    showToast(ok ? "CA をコピーしました" : "コピーに失敗", ok ? "ok" : "error");
+  });
+}
+
+if (els.snapshotBtn) {
+  els.snapshotBtn.addEventListener("click", async () => {
+    const t = state.selectedMint && findToken(state.selectedMint);
+    if (!t) return;
+    const md = buildSnapshotMarkdown(t);
+    const ok = await copyText(md);
+    showToast(
+      ok ? "スナップショットを Markdown でコピー" : "コピーに失敗",
+      ok ? "ok" : "error"
+    );
   });
 }
 

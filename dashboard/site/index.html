@@ -80,6 +80,10 @@
             <a id="detail-open-link" href="#" target="_blank" rel="noopener" class="open-ext">↗ 新規タブ</a>
           </div>
         </div>
+        <div class="action-bar">
+          <button id="copy-ca-btn" class="action-btn" title="CA (mint) をクリップボードにコピー">📋 CA</button>
+          <button id="snapshot-btn" class="action-btn" title="銘柄情報を Markdown でコピー">📸 Snapshot</button>
+        </div>
         <div class="iframe-wrap">
           <iframe id="chart-frame" title="chart" loading="lazy"
                   referrerpolicy="no-referrer"
@@ -99,6 +103,8 @@
       </div>
     </section>
   </main>
+
+  <div id="toast" class="toast" hidden></div>
 
   <script src="./app.js" defer></script>
 </body>
