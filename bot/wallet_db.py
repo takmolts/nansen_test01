@@ -494,6 +494,40 @@ class WalletDB:
         async with self._conn.execute(sql, (target_mint, int(since_block_ts))) as cursor:
             return await cursor.fetchall()
 
+    async def list_events_for_mint(
+        self,
+        *,
+        target_mint: str,
+        since_block_ts: int,
+        limit: int = 200,
+    ) -> list[aiosqlite.Row]:
+        """指定 mint の sm_signal_events を時系列降順で返す (BUY/SELL 両方)。
+
+        Nansen label を sm_roster から JOIN して付与。
+        """
+        assert self._conn is not None
+        sql = """
+        SELECT
+            e.block_ts                  AS block_ts,
+            e.signature                 AS signature,
+            e.wallet                    AS wallet,
+            e.direction                 AS direction,
+            e.quote_label               AS quote_label,
+            e.quote_change              AS quote_change,
+            e.target_change             AS target_change,
+            e.is_large                  AS is_large,
+            r.last_label                AS label
+        FROM sm_signal_events e
+        LEFT JOIN sm_roster r ON r.wallet_address = e.wallet
+        WHERE e.target_mint = ? AND e.block_ts >= ?
+        ORDER BY e.block_ts DESC
+        LIMIT ?
+        """
+        async with self._conn.execute(
+            sql, (target_mint, int(since_block_ts), int(limit))
+        ) as cursor:
+            return await cursor.fetchall()
+
     async def sm_signal_events_count(self, *, since_block_ts: int = 0) -> int:
         assert self._conn is not None
         async with self._conn.execute(

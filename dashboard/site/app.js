@@ -5,13 +5,28 @@ const WINDOWS = ["1h", "6h", "24h", "7d"];
 const DATA_BASE = "./data";
 
 const state = {
-  window: "24h",
+  window: "1h",
   sort: "distinct_buyers",
   minBuyers: 1,
   search: "",
   source: "dexscreener",
   selectedMint: null,
   payloads: {}, // window -> payload
+  buyersView: "buyers", // "buyers" | "events"
+};
+
+// window -> DexScreener bucket key
+const WINDOW_TO_BUCKET = {
+  "1h": "h1",
+  "6h": "h6",
+  "24h": "h24",
+  "7d": "h24", // 7d は h24 で代替
+};
+const BUCKET_LABEL = {
+  m5: "5m",
+  h1: "1h",
+  h6: "6h",
+  h24: "24h",
 };
 
 const els = {
@@ -33,6 +48,12 @@ const els = {
   detailOpenLink: document.getElementById("detail-open-link"),
   buyersCount: document.getElementById("buyers-count"),
   buyersList: document.getElementById("buyers-list"),
+  eventsCount: document.getElementById("events-count"),
+  eventsList: document.getElementById("events-list"),
+  buyersTabs: document.querySelectorAll(".buyers-tab"),
+  buyersViews: document.querySelectorAll(".buyers-view"),
+  tokenInfoGrid: document.getElementById("token-info-grid"),
+  tokenInfoScore: document.getElementById("token-info-score"),
   srcBtns: document.querySelectorAll(".src-btn"),
   resizer: document.getElementById("resizer"),
   backBtn: document.getElementById("back-btn"),
@@ -87,9 +108,25 @@ function shortAddr(a) {
 
 function chartUrl(mint, source) {
   if (source === "birdeye") {
-    return `https://birdeye.so/token/${encodeURIComponent(mint)}?chain=solana`;
+    // birdeye の埋め込みは ?chart_interval=15 を渡すと 15m がデフォルト
+    return `https://birdeye.so/token/${encodeURIComponent(mint)}?chain=solana&chart_interval=15`;
   }
-  return `https://dexscreener.com/solana/${encodeURIComponent(mint)}?embed=1&theme=dark&info=0&trades=0`;
+  // DexScreener iframe: interval=15 で 15m スケールをデフォルト指定
+  return `https://dexscreener.com/solana/${encodeURIComponent(mint)}?embed=1&theme=dark&info=0&trades=0&interval=15`;
+}
+
+function fmtAgeFromMs(ms) {
+  if (!ms || typeof ms !== "number") return null;
+  const sec = Math.max(0, Math.floor((Date.now() - ms) / 1000));
+  if (sec < 60) return sec + "s";
+  if (sec < 3600) return Math.floor(sec / 60) + "m";
+  if (sec < 86400) return Math.floor(sec / 3600) + "h";
+  return Math.floor(sec / 86400) + "d";
+}
+
+// 現選択 window から DexScreener の bucket (m5/h1/h6/h24) を返す。
+function currentBucket() {
+  return WINDOW_TO_BUCKET[state.window] || "h24";
 }
 
 function externalUrl(mint, source) {
@@ -174,6 +211,12 @@ function renderList() {
     const info = document.createElement("div");
     info.className = "info";
     const sym = t.symbol || shortAddr(t.mint);
+    const bucket = currentBucket();
+    const vol = t.volume && t.volume[bucket];
+    const tx = t.txns && t.txns[bucket];
+    const txTotal = tx ? (tx.buys || 0) + (tx.sells || 0) : null;
+    const age = fmtAgeFromMs(t.pair_created_at_ms);
+    const bucketLabel = BUCKET_LABEL[bucket];
     info.innerHTML = `
       <div class="symbol-row">
         <span class="sym">${escapeHtml(sym)}</span>
@@ -184,6 +227,13 @@ function renderList() {
         <span>SOL ${fmtNum(t.sum_buy_sol)}</span>
         <span>$${fmtNum(t.sum_buy_stable)}</span>
         ${t.n_large_buys ? `<span class="warn">🐋 ${t.n_large_buys}</span>` : ""}
+      </div>
+      <div class="dex-stats">
+        ${t.market_cap != null ? `<span>MC $${fmtNum(t.market_cap)}</span>` : ""}
+        ${vol != null ? `<span title="DexScreener ${bucketLabel} volume">Vol $${fmtNum(vol)}</span>` : ""}
+        ${t.liquidity_usd != null ? `<span title="Liquidity (USD)">LIQ $${fmtNum(t.liquidity_usd)}</span>` : ""}
+        ${txTotal != null ? `<span title="${bucketLabel} buys/sells">${txTotal}tx</span>` : ""}
+        ${age ? `<span title="Pair age">⏱ ${age}</span>` : ""}
       </div>
     `;
 
@@ -253,6 +303,9 @@ function selectToken(mint) {
 
   updateChart();
   renderBuyers(t);
+  renderEvents(t);
+  renderTokenInfo(t);
+  applyBuyersView();
 }
 
 function updateChart() {
@@ -291,6 +344,145 @@ function renderBuyers(t) {
     frag.append(li);
   }
   els.buyersList.append(frag);
+}
+
+function renderEvents(t) {
+  if (!els.eventsList) return;
+  const events = Array.isArray(t.events) ? t.events : [];
+  if (els.eventsCount) els.eventsCount.textContent = events.length;
+  els.eventsList.innerHTML = "";
+  const frag = document.createDocumentFragment();
+  for (const ev of events) {
+    const li = document.createElement("li");
+    const dir = (ev.direction || "").toUpperCase();
+    const isBuy = dir === "BUY";
+    const amount =
+      ev.quote_label === "SOL"
+        ? `${fmtNum(Math.abs(ev.quote_change || 0))} SOL`
+        : `$${fmtNum(Math.abs(ev.quote_change || 0))}`;
+    const labelHtml = ev.label
+      ? `<span class="label-cell" title="${escapeHtml(ev.label)}">${escapeHtml(ev.label)}</span>`
+      : `<span class="label-cell empty">-</span>`;
+    li.innerHTML = `
+      <span class="ts">
+        <span class="abs">${fmtTimeShort(ev.ts)}</span>
+        <span class="ago">${fmtAgo(ev.ts)}</span>
+      </span>
+      <span class="dir ${isBuy ? "buy" : "sell"}">${isBuy ? "BUY" : "SELL"}</span>
+      <span class="wallet" title="${escapeHtml(ev.wallet || "")}">${shortAddr(ev.wallet)}</span>
+      ${labelHtml}
+      <span class="amount ${isBuy ? "buy" : "sell"}">${amount}${ev.is_large ? " 🐋" : ""}</span>
+    `;
+    frag.append(li);
+  }
+  els.eventsList.append(frag);
+}
+
+function applyBuyersView() {
+  const view = state.buyersView;
+  els.buyersTabs.forEach((b) =>
+    b.classList.toggle("active", b.dataset.view === view)
+  );
+  els.buyersViews.forEach((v) => {
+    v.hidden = v.dataset.view !== view;
+  });
+}
+
+// --- Token Info panel ---
+
+function pctClass(v) {
+  if (v == null) return "";
+  if (v > 0) return "pos";
+  if (v < 0) return "neg";
+  return "";
+}
+function fmtPct(v, digits = 2) {
+  if (v == null || Number.isNaN(v)) return "-";
+  const s = v.toFixed(digits) + "%";
+  return v > 0 ? "+" + s : s;
+}
+
+function renderTokenInfo(t) {
+  if (!els.tokenInfoGrid) return;
+
+  const bucket = currentBucket();
+  const bucketLabel = BUCKET_LABEL[bucket] || bucket;
+
+  const vol = t.volume ? t.volume[bucket] : null;
+  const tx = t.txns ? t.txns[bucket] : null;
+  const pc = t.price_change ? t.price_change[bucket] : null;
+  const age = fmtAgeFromMs(t.pair_created_at_ms);
+
+  const liq = t.liquidity_usd;
+  const mcap = t.market_cap;
+  const volMcap = vol != null && mcap ? vol / mcap : null;
+  const liqMcap = liq != null && mcap ? liq / mcap : null;
+
+  // 銘柄スコア (簡易判定)
+  const indicators = [];
+  if (liq != null) {
+    if (liq < 5_000) indicators.push({ cls: "bad", text: "LIQ 薄い" });
+    else if (liq < 30_000) indicators.push({ cls: "warn", text: "LIQ やや薄" });
+    else indicators.push({ cls: "good", text: "LIQ 厚い" });
+  }
+  if (volMcap != null) {
+    if (volMcap >= 1) indicators.push({ cls: "good", text: `Vol/MC ${(volMcap * 100).toFixed(0)}%` });
+    else if (volMcap < 0.05) indicators.push({ cls: "warn", text: "Vol/MC 低" });
+  }
+  if (tx) {
+    const total = (tx.buys || 0) + (tx.sells || 0);
+    if (total > 0) {
+      const buyRatio = (tx.buys || 0) / total;
+      if (buyRatio >= 0.65) indicators.push({ cls: "good", text: `買い優勢 ${(buyRatio * 100).toFixed(0)}%` });
+      else if (buyRatio <= 0.35) indicators.push({ cls: "bad", text: `売り優勢 ${((1 - buyRatio) * 100).toFixed(0)}%` });
+    }
+  }
+  if (pc != null) {
+    if (pc >= 30) indicators.push({ cls: "good", text: `急騰 ${fmtPct(pc, 0)}` });
+    else if (pc <= -20) indicators.push({ cls: "bad", text: `急落 ${fmtPct(pc, 0)}` });
+  }
+  if (t.pair_created_at_ms) {
+    const ageMin = (Date.now() - t.pair_created_at_ms) / 60_000;
+    if (ageMin < 60) indicators.push({ cls: "warn", text: "新規 (1h 未満)" });
+    else if (ageMin < 24 * 60) indicators.push({ cls: "warn", text: "<24h" });
+  }
+
+  const cells = [
+    { label: "MCap", value: mcap != null ? `$${fmtNum(mcap)}` : "-" },
+    { label: "LIQ", value: liq != null ? `$${fmtNum(liq)}` : "-" },
+    { label: `Vol ${bucketLabel}`, value: vol != null ? `$${fmtNum(vol)}` : "-" },
+    {
+      label: `Tx ${bucketLabel}`,
+      value: tx
+        ? `<span class="buy">${tx.buys || 0}</span> / <span class="sell">${tx.sells || 0}</span>`
+        : "-",
+      html: true,
+    },
+    {
+      label: `Δ ${bucketLabel}`,
+      value: pc != null ? `<span class="${pctClass(pc)}">${fmtPct(pc)}</span>` : "-",
+      html: true,
+    },
+    { label: "Vol/MC", value: volMcap != null ? `${(volMcap * 100).toFixed(0)}%` : "-" },
+    { label: "LIQ/MC", value: liqMcap != null ? `${(liqMcap * 100).toFixed(1)}%` : "-" },
+    { label: "Age", value: age || "-" },
+  ];
+
+  els.tokenInfoGrid.innerHTML = cells
+    .map(
+      (c) => `
+      <div class="ti-cell">
+        <div class="ti-label">${escapeHtml(c.label)}</div>
+        <div class="ti-value">${c.html ? c.value : escapeHtml(c.value)}</div>
+      </div>`
+    )
+    .join("");
+
+  els.tokenInfoScore.innerHTML = indicators.length
+    ? indicators
+        .map((i) => `<span class="ti-badge ${i.cls}">${escapeHtml(i.text)}</span>`)
+        .join("")
+    : `<span class="ti-empty">DexScreener 指標未取得</span>`;
 }
 
 function escapeHtml(s) {
@@ -429,6 +621,13 @@ els.srcBtns.forEach((b) => {
   });
 });
 
+els.buyersTabs.forEach((b) => {
+  b.addEventListener("click", () => {
+    state.buyersView = b.dataset.view;
+    applyBuyersView();
+  });
+});
+
 // --- resizer (左ペイン幅をドラッグで変更、 localStorage 保存) ---
 
 const LIST_W_KEY = "dashboard:list_w";
@@ -506,11 +705,11 @@ async function applyDeepLink() {
   const mint = params.get("mint");
   if (!mint) return;
 
-  // URL で window 指定があれば優先、 なければ 24h → 7d → 6h → 1h の順で探す
+  // URL で window 指定があれば優先、 なければ 1h → 6h → 24h → 7d の順で探す
   const requested = params.get("window");
   const order = requested && WINDOWS.includes(requested)
     ? [requested, ...WINDOWS.filter((w) => w !== requested)]
-    : ["24h", "7d", "6h", "1h"];
+    : ["1h", "6h", "24h", "7d"];
 
   for (const w of order) {
     const payload = await loadWindow(w);

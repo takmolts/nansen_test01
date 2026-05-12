@@ -158,6 +158,13 @@ input[type=number] { width: 60px; }
 }
 .token-list .stats .buy { color: var(--buy); }
 .token-list .stats .warn { color: var(--warn); }
+.token-list .dex-stats {
+  display: flex; gap: 8px; margin-top: 2px;
+  color: var(--muted); font-size: 11px;
+  flex-wrap: wrap;
+  font-variant-numeric: tabular-nums;
+}
+.token-list .dex-stats span { white-space: nowrap; }
 .token-list .right {
   text-align: right;
   color: var(--muted);
@@ -274,10 +281,18 @@ input[type=number] { width: 60px; }
 .toast.show { opacity: 1; }
 .toast.error { border-color: var(--sell); }
 
-.iframe-wrap {
+.chart-body {
+  display: grid;
+  grid-template-columns: 1fr 240px;
   flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.iframe-wrap {
   min-height: 320px;
   background: #000;
+  overflow: hidden;
 }
 .iframe-wrap iframe {
   width: 100%;
@@ -285,6 +300,68 @@ input[type=number] { width: 60px; }
   border: 0;
   display: block;
 }
+
+.token-info-pane {
+  border-left: 1px solid var(--border);
+  background: var(--bg-2);
+  padding: 10px 12px;
+  overflow-y: auto;
+  font-size: 12px;
+}
+.token-info-pane h3 {
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: var(--muted);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.token-info-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px 10px;
+  margin-bottom: 10px;
+}
+.ti-cell {
+  background: var(--bg-3);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 6px 8px;
+}
+.ti-label {
+  color: var(--muted);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.ti-value {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  margin-top: 1px;
+}
+.ti-value .buy { color: var(--buy); }
+.ti-value .sell { color: var(--sell); }
+.ti-value .pos { color: var(--buy); }
+.ti-value .neg { color: var(--sell); }
+
+.token-info-score {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.ti-badge {
+  padding: 2px 8px;
+  font-size: 11px;
+  border-radius: 99px;
+  border: 1px solid var(--border);
+  background: var(--bg-3);
+}
+.ti-badge.good { color: var(--buy); border-color: rgba(46, 204, 113, 0.5); }
+.ti-badge.warn { color: var(--warn); border-color: rgba(255, 191, 71, 0.5); }
+.ti-badge.bad  { color: var(--sell); border-color: rgba(255, 93, 108, 0.5); }
+.ti-empty { color: var(--muted); font-size: 11px; }
 
 .buyers {
   border-top: 1px solid var(--border);
@@ -295,6 +372,28 @@ input[type=number] { width: 60px; }
 }
 .buyers h3 { margin: 4px 0 6px; font-size: 13px; color: var(--muted); font-weight: 500; }
 .buyers ul { list-style: none; margin: 0; padding: 0; }
+
+.buyers-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+}
+.buyers-tab {
+  background: transparent;
+  color: var(--muted);
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 6px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.buyers-tab:hover { color: var(--text); }
+.buyers-tab.active {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
 
 .buyers-header,
 .buyers li {
@@ -336,6 +435,47 @@ input[type=number] { width: 60px; }
 .buyers .ts .abs { color: var(--text); }
 .buyers .ts .ago { color: var(--muted); margin-left: 6px; font-size: 11px; }
 
+/* 履歴 (events) ビュー */
+.events-header,
+#events-list li {
+  display: grid;
+  grid-template-columns:
+    minmax(95px, auto)   /* 時刻 */
+    44px                  /* 方向 */
+    minmax(90px, auto)   /* ウォレット */
+    minmax(60px, 1fr)    /* ラベル */
+    minmax(80px, auto);  /* 金額 */
+  gap: 10px;
+  align-items: baseline;
+}
+.events-header {
+  padding: 4px 0;
+  font-size: 10px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  background: var(--bg-2);
+}
+.events-header .num { text-align: right; }
+#events-list li {
+  padding: 4px 0;
+  font-size: 12px;
+  border-bottom: 1px dashed var(--border);
+  font-variant-numeric: tabular-nums;
+}
+#events-list .dir {
+  font-weight: 600;
+  font-size: 11px;
+  text-align: center;
+}
+#events-list .dir.buy { color: var(--buy); }
+#events-list .dir.sell { color: var(--sell); }
+#events-list .amount.buy { color: var(--buy); text-align: right; white-space: nowrap; }
+#events-list .amount.sell { color: var(--sell); text-align: right; white-space: nowrap; }
+
 /* === モバイル: 一覧と詳細を「画面切替」で見せる (左右 2 ペイン不可) === */
 @media (max-width: 800px) {
   .topbar { padding: 8px 10px; }
@@ -374,4 +514,13 @@ input[type=number] { width: 60px; }
   .chart-title .symbol { font-size: 14px; }
   .iframe-wrap { min-height: 320px; }
   .buyers { max-height: 35vh; }
+
+  .chart-body {
+    grid-template-columns: 1fr;
+  }
+  .token-info-pane {
+    border-left: none;
+    border-top: 1px solid var(--border);
+    max-height: 220px;
+  }
 }

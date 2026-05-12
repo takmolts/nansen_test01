@@ -22,9 +22,9 @@
 
   <section class="controls">
     <div class="control-group" id="window-tabs" role="tablist">
-      <button data-window="1h" class="tab">1h</button>
+      <button data-window="1h" class="tab active">1h</button>
       <button data-window="6h" class="tab">6h</button>
-      <button data-window="24h" class="tab active">24h</button>
+      <button data-window="24h" class="tab">24h</button>
       <button data-window="7d" class="tab">7d</button>
     </div>
     <div class="control-group">
@@ -84,21 +84,47 @@
           <button id="copy-ca-btn" class="action-btn" title="CA (mint) をクリップボードにコピー">📋 CA</button>
           <button id="snapshot-btn" class="action-btn" title="銘柄情報を Markdown でコピー">📸 Snapshot</button>
         </div>
-        <div class="iframe-wrap">
-          <iframe id="chart-frame" title="chart" loading="lazy"
-                  referrerpolicy="no-referrer"
-                  allow="clipboard-write"></iframe>
+        <div class="chart-body">
+          <div class="iframe-wrap">
+            <iframe id="chart-frame" title="chart" loading="lazy"
+                    referrerpolicy="no-referrer"
+                    allow="clipboard-write"></iframe>
+          </div>
+          <aside class="token-info-pane" id="token-info-pane">
+            <h3>Token Info</h3>
+            <div id="token-info-grid" class="token-info-grid"></div>
+            <div id="token-info-score" class="token-info-score"></div>
+          </aside>
         </div>
         <div class="buyers">
-          <h3>Buyers (<span id="buyers-count">0</span>)</h3>
-          <div class="buyers-header">
-            <span>ウォレット</span>
-            <span>ラベル</span>
-            <span class="num">取引数</span>
-            <span class="num">合計</span>
-            <span class="num">最終</span>
+          <div class="buyers-tabs" role="tablist">
+            <button data-view="buyers" class="buyers-tab active">
+              Buyers (<span id="buyers-count">0</span>)
+            </button>
+            <button data-view="events" class="buyers-tab">
+              履歴 (<span id="events-count">0</span>)
+            </button>
           </div>
-          <ul id="buyers-list"></ul>
+          <div class="buyers-view" data-view="buyers">
+            <div class="buyers-header">
+              <span>ウォレット</span>
+              <span>ラベル</span>
+              <span class="num">取引数</span>
+              <span class="num">合計</span>
+              <span class="num">最終</span>
+            </div>
+            <ul id="buyers-list"></ul>
+          </div>
+          <div class="buyers-view" data-view="events" hidden>
+            <div class="events-header">
+              <span>時刻</span>
+              <span>方向</span>
+              <span>ウォレット</span>
+              <span>ラベル</span>
+              <span class="num">金額</span>
+            </div>
+            <ul id="events-list"></ul>
+          </div>
         </div>
       </div>
     </section>

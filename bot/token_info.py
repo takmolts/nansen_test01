@@ -28,6 +28,14 @@ class TokenInfo:
     price_usd: float | None
     image_url: str | None
     fetched_at: float
+    # 拡張 (DexScreener pair から取れる範囲)
+    liquidity_usd: float | None = None
+    # 各バケット (m5/h1/h6/h24) の volume(USD) と txns(buys/sells)
+    volume: dict[str, float] | None = None
+    txns: dict[str, dict[str, int]] | None = None
+    price_change: dict[str, float] | None = None
+    # pair 作成時刻 (ms)。 公開からの経過時間計算に使う。
+    pair_created_at_ms: int | None = None
 
     @property
     def is_stale(self) -> bool:
@@ -94,6 +102,19 @@ async def get_token_info(address: str, *, force: bool = False) -> TokenInfo | No
             mcap = data.get("fdv")
         img = info.get("imageUrl") if isinstance(info, dict) else None
 
+        liq_obj = data.get("liquidity") if isinstance(data.get("liquidity"), dict) else None
+        liquidity_usd = _coerce_float(liq_obj.get("usd")) if liq_obj else None
+
+        volume = _extract_bucket_floats(data.get("volume"))
+        price_change = _extract_bucket_floats(data.get("priceChange"))
+        txns = _extract_txns(data.get("txns"))
+
+        pca = data.get("pairCreatedAt")
+        try:
+            pair_created_at_ms = int(pca) if pca is not None else None
+        except (TypeError, ValueError):
+            pair_created_at_ms = None
+
         tinfo = TokenInfo(
             address=address,
             symbol=symbol if isinstance(symbol, str) and symbol else None,
@@ -102,9 +123,44 @@ async def get_token_info(address: str, *, force: bool = False) -> TokenInfo | No
             price_usd=_coerce_float(data.get("priceUsd")),
             image_url=img if isinstance(img, str) and img.startswith("http") else None,
             fetched_at=time.time(),
+            liquidity_usd=liquidity_usd,
+            volume=volume,
+            txns=txns,
+            price_change=price_change,
+            pair_created_at_ms=pair_created_at_ms,
         )
         _cache[address] = tinfo
         return tinfo
+
+
+def _extract_bucket_floats(obj: object) -> dict[str, float] | None:
+    """DexScreener の {"m5": .., "h1": .., "h6": .., "h24": ..} 形式を float dict 化。"""
+    if not isinstance(obj, dict):
+        return None
+    out: dict[str, float] = {}
+    for k in ("m5", "h1", "h6", "h24"):
+        v = _coerce_float(obj.get(k))
+        if v is not None:
+            out[k] = v
+    return out or None
+
+
+def _extract_txns(obj: object) -> dict[str, dict[str, int]] | None:
+    """DexScreener の txns.{m5,h1,h6,h24}.{buys,sells} を int 化。"""
+    if not isinstance(obj, dict):
+        return None
+    out: dict[str, dict[str, int]] = {}
+    for k in ("m5", "h1", "h6", "h24"):
+        sub = obj.get(k)
+        if not isinstance(sub, dict):
+            continue
+        try:
+            buys = int(sub.get("buys") or 0)
+            sells = int(sub.get("sells") or 0)
+        except (TypeError, ValueError):
+            continue
+        out[k] = {"buys": buys, "sells": sells}
+    return out or None
 
 
 async def get_token_infos(addresses: list[str]) -> dict[str, TokenInfo | None]:

@@ -50,6 +50,7 @@ async def _build_window_payload(
     min_distinct_buyers: int,
     top_n: int,
     buyers_per_token: int,
+    events_per_token: int,
 ) -> dict[str, Any]:
     """1 期間ぶんの集計 dict を返す (JSON にそのまま dump 可能)。"""
     since_ts = now_ts - window_hours * 3600
@@ -71,6 +72,9 @@ async def _build_window_payload(
             target_mint=mint, since_block_ts=since_ts
         )
         buyers = [dict(b) for b in buyer_rows[:buyers_per_token]]
+        event_rows = await db.list_events_for_mint(
+            target_mint=mint, since_block_ts=since_ts, limit=events_per_token
+        )
         tokens.append({
             "mint": mint,
             "distinct_buyers": int(d.get("distinct_buyers") or 0),
@@ -97,6 +101,20 @@ async def _build_window_payload(
                     "last_ts": int(b.get("last_ts") or 0),
                 }
                 for b in buyers
+            ],
+            "events": [
+                {
+                    "ts": int(e.get("block_ts") or 0),
+                    "wallet": e.get("wallet"),
+                    "label": e.get("label"),
+                    "direction": e.get("direction"),
+                    "quote_label": e.get("quote_label"),
+                    "quote_change": float(e.get("quote_change") or 0.0),
+                    "target_change": float(e.get("target_change") or 0.0),
+                    "is_large": bool(e.get("is_large")),
+                    "signature": e.get("signature"),
+                }
+                for e in (dict(x) for x in event_rows)
             ],
         })
 
@@ -148,6 +166,16 @@ async def _enrich_tokens(payloads: list[dict[str, Any]]) -> None:
                 t["price_usd"] = info.price_usd
             if info.image_url:
                 t["image_url"] = info.image_url
+            if info.liquidity_usd is not None:
+                t["liquidity_usd"] = info.liquidity_usd
+            if info.volume:
+                t["volume"] = info.volume
+            if info.txns:
+                t["txns"] = info.txns
+            if info.price_change:
+                t["price_change"] = info.price_change
+            if info.pair_created_at_ms is not None:
+                t["pair_created_at_ms"] = info.pair_created_at_ms
 
 
 def _write_json(path: Path, payload: Any) -> None:
@@ -165,6 +193,7 @@ async def export_all(
     min_distinct_buyers: int = 2,
     top_n: int = 50,
     buyers_per_token: int = 30,
+    events_per_token: int = 200,
     enrich: bool = True,
 ) -> dict[str, int]:
     """全 window を集計して JSON 出力。 各 window の token 件数を dict で返す。"""
@@ -183,6 +212,7 @@ async def export_all(
                 min_distinct_buyers=min_distinct_buyers,
                 top_n=top_n,
                 buyers_per_token=buyers_per_token,
+                events_per_token=events_per_token,
             )
             payloads.append(payload)
 
@@ -214,6 +244,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--min-buyers", type=int, default=2)
     parser.add_argument("--top-n", type=int, default=50)
     parser.add_argument("--buyers-per-token", type=int, default=30)
+    parser.add_argument("--events-per-token", type=int, default=200,
+                        help="銘柄ごとに出力する時系列イベントの最大件数")
     parser.add_argument("--no-enrich", action="store_true", help="DexScreener 補完をしない")
     parser.add_argument("--log-level", default="INFO")
     return parser.parse_args()
@@ -232,6 +264,7 @@ def main() -> None:
             min_distinct_buyers=args.min_buyers,
             top_n=args.top_n,
             buyers_per_token=args.buyers_per_token,
+            events_per_token=args.events_per_token,
             enrich=not args.no_enrich,
         )
     )
