@@ -32,6 +32,8 @@ const BUCKET_LABEL = {
 const els = {
   updated: document.getElementById("updated"),
   counts: document.getElementById("counts"),
+  reloadBtn: document.getElementById("reload-btn"),
+  autoRefresh: document.getElementById("auto-refresh"),
   tabs: document.querySelectorAll("#window-tabs .tab"),
   sort: document.getElementById("sort"),
   minBuyers: document.getElementById("min-buyers"),
@@ -698,6 +700,69 @@ function clampListW(px) {
   });
 })();
 
+// --- データ再読込 (手動 + オート) ---
+
+const AUTO_REFRESH_KEY = "dashboard:auto_refresh";
+const AUTO_REFRESH_INTERVAL_MS = 60 * 1000;
+let _autoTimer = null;
+let _reloading = false;
+
+async function reloadData({ silent = false } = {}) {
+  if (_reloading) return;
+  _reloading = true;
+  if (els.reloadBtn) els.reloadBtn.classList.add("spinning");
+  try {
+    // 現 window のキャッシュを捨てて再 fetch (他 window は遅延 fetch でいい)
+    delete state.payloads[state.window];
+    const [meta] = await Promise.all([loadMeta(), loadWindow(state.window)]);
+    state._meta = meta;
+    renderHeader(state.payloads[state.window], meta);
+    renderList();
+    // 選択中の銘柄があれば最新データで再描画 (state を保てる範囲で)
+    if (state.selectedMint) {
+      const t = findToken(state.selectedMint);
+      if (t) {
+        // selectToken だと list ハイライト等もまとめて更新できる
+        selectToken(state.selectedMint);
+      }
+    }
+    if (!silent) showToast("最新データに更新しました");
+  } catch (e) {
+    console.warn("reload failed", e);
+    if (!silent) showToast("再読込に失敗", "error");
+  } finally {
+    _reloading = false;
+    if (els.reloadBtn) els.reloadBtn.classList.remove("spinning");
+  }
+}
+
+function setAutoRefresh(enabled, { persist = true } = {}) {
+  if (els.autoRefresh) els.autoRefresh.checked = enabled;
+  if (persist) {
+    try { localStorage.setItem(AUTO_REFRESH_KEY, enabled ? "1" : "0"); } catch {}
+  }
+  if (_autoTimer) {
+    clearInterval(_autoTimer);
+    _autoTimer = null;
+  }
+  if (enabled) {
+    _autoTimer = setInterval(() => {
+      // ページが裏に隠れている間は無駄打ち回避
+      if (document.hidden) return;
+      reloadData({ silent: true });
+    }, AUTO_REFRESH_INTERVAL_MS);
+  }
+}
+
+if (els.reloadBtn) {
+  els.reloadBtn.addEventListener("click", () => reloadData());
+}
+if (els.autoRefresh) {
+  els.autoRefresh.addEventListener("change", () => {
+    setAutoRefresh(els.autoRefresh.checked);
+  });
+}
+
 // --- deep link (?mint=...&window=...) ---
 
 async function applyDeepLink() {
@@ -737,4 +802,8 @@ async function applyDeepLink() {
   renderHeader(state.payloads[state.window], meta);
   renderList();
   await applyDeepLink();
+  // 自動更新は localStorage から復元 (デフォルト ON)
+  const saved = localStorage.getItem(AUTO_REFRESH_KEY);
+  const enabled = saved === null ? true : saved === "1";
+  setAutoRefresh(enabled, { persist: false });
 })();

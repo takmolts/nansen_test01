@@ -46,8 +46,42 @@ a:hover { text-decoration: underline; }
 .title { display: flex; align-items: center; gap: 10px; }
 .title h1 { font-size: 16px; margin: 0; font-weight: 600; }
 .title .emoji { font-size: 20px; }
-.meta { color: var(--muted); font-size: 12px; }
+.meta {
+  color: var(--muted);
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  gap: 0;
+}
 .meta .sep { margin: 0 6px; }
+
+.reload-btn {
+  background: var(--bg-3);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-size: 13px;
+  cursor: pointer;
+  line-height: 1;
+  font-family: inherit;
+}
+.reload-btn:hover { border-color: var(--accent); }
+.reload-btn.spinning { animation: spin 0.8s linear infinite; }
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.auto-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 8px;
+  cursor: pointer;
+  user-select: none;
+}
+.auto-toggle input { margin: 0; }
 
 .controls {
   display: flex;
