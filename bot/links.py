@@ -62,16 +62,31 @@ def grok_url(query: str) -> str:
     return f"https://grok.com/?q={encoded}"
 
 
-def grok_token_link_md(symbol: str | None, address: str) -> str:
-    """`[Grok で調べる](url)` の md。 query は ticker + CA + ナラティブ質問。"""
+def make_grok_narrative_url(ticker: str, ca_addr: str) -> str:
+    """ナラティブ確認用 Grok クエリ URL。"""
     parts: list[str] = []
-    if symbol:
-        parts.append(f"${symbol}")
-    if address:
-        parts.append(f"(CA: {address})")
+    if ticker:
+        parts.append(f"${ticker}")
+    if ca_addr:
+        parts.append(f"(CA: {ca_addr})")
     parts.append("のナラティブと最新動向を教えて")
-    q = " ".join(parts)
-    return f"[Grok で調べる]({grok_url(q)})"
+    return grok_url(" ".join(parts))
+
+
+def deepnets_token_url(token_address: str) -> str:
+    """DeepNets のトークン分析ページ URL。"""
+    return f"https://deepnets.ai/token/{token_address}"
+
+
+def research_links_md(symbol: str | None, address: str | None) -> str:
+    """`🧠 [DeepNets](...) | 🤖 [Grokで調べる](...)` の md。 address 必須。"""
+    if not address:
+        return ""
+    grok = make_grok_narrative_url(symbol or "", address)
+    return (
+        f"🧠 [DeepNets]({deepnets_token_url(address)}) | "
+        f"🤖 [Grokで調べる]({grok})"
+    )
 
 
 def x_search_links_md(symbol: str | None, address: str | None) -> str:

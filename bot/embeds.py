@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any
 import discord
 
 from bot.links import (
-    grok_token_link_md,
+    research_links_md,
     solscan_account_url,
     solscan_token_url,
     trade_links_md,
@@ -226,11 +226,11 @@ def build_token_info_embed(
             inline=False,
         )
 
-    grok_md = grok_token_link_md(sym_for_link, token_address)
-    if grok_md:
+    research_md = research_links_md(sym_for_link, token_address)
+    if research_md:
         embed.add_field(
-            name="🤖 Grok",
-            value=grok_md,
+            name="🔎 Research",
+            value=research_md,
             inline=False,
         )
 

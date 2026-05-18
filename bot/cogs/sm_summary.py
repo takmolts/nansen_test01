@@ -32,7 +32,7 @@ from discord.ext import commands
 
 from bot.cogs.check import AnalyzeButtonView
 from bot.config import Config
-from bot.links import grok_token_link_md, trade_links_md, x_search_links_md
+from bot.links import research_links_md, trade_links_md, x_search_links_md
 from bot.token_info import TokenInfo, get_token_info, get_token_infos
 from bot.wallet_db import WalletDB
 
@@ -424,7 +424,9 @@ def _build_token_embed(r: dict, *, rank: int) -> discord.Embed:
         x_md = x_search_links_md(sym, addr)
         if x_md:
             desc_lines.append(f"🔍 X：{x_md}")
-        desc_lines.append(f"🤖 {grok_token_link_md(sym, addr)}")
+        research_md = research_links_md(sym, addr)
+        if research_md:
+            desc_lines.append(f"🔎 {research_md}")
         desc_lines.append(f"🔗 Trade：{trade_links_md(addr, chain='solana')}")
     embed.description = "\n".join(desc_lines)
 
@@ -514,7 +516,9 @@ def _build_realtime_embed(
     x_md = x_search_links_md(sym, target_mint)
     if x_md:
         desc_lines.append(f"🔍 X：{x_md}")
-    desc_lines.append(f"🤖 {grok_token_link_md(sym, target_mint)}")
+    research_md = research_links_md(sym, target_mint)
+    if research_md:
+        desc_lines.append(f"🔎 {research_md}")
     desc_lines.append(f"🔗 Trade：{trade_links_md(target_mint, chain='solana')}")
     embed.description = "\n".join(desc_lines)
 

@@ -38,6 +38,7 @@
       <select id="sort">
         <option value="distinct_buyers">買い手数</option>
         <option value="last_seen_ts">直近</option>
+        <option value="market_cap">MCAP</option>
         <option value="sum_buy_sol">SOL 合計</option>
         <option value="sum_buy_stable">USD 合計</option>
         <option value="buy_trades">取引数</option>
@@ -89,18 +90,15 @@
         <div class="action-bar">
           <button id="copy-ca-btn" class="action-btn" title="CA (mint) をクリップボードにコピー">📋 CA</button>
           <button id="snapshot-btn" class="action-btn" title="銘柄情報を Markdown でコピー">📸 Snapshot</button>
+          <a id="grok-btn" class="action-btn" href="#" target="_blank" rel="noopener"
+             title="Grok でナラティブを調べる">🤖 Grok</a>
+          <a id="deepnets-btn" class="action-btn" href="#" target="_blank" rel="noopener"
+             title="DeepNets でトークン分析">🧠 DeepNets</a>
         </div>
-        <div class="chart-body">
-          <div class="iframe-wrap">
-            <iframe id="chart-frame" title="chart" loading="lazy"
-                    referrerpolicy="no-referrer"
-                    allow="clipboard-write"></iframe>
-          </div>
-          <aside class="token-info-pane" id="token-info-pane">
-            <h3>Token Info</h3>
-            <div id="token-info-grid" class="token-info-grid"></div>
-            <div id="token-info-score" class="token-info-score"></div>
-          </aside>
+        <div class="iframe-wrap">
+          <iframe id="chart-frame" title="chart" loading="lazy"
+                  referrerpolicy="no-referrer"
+                  allow="clipboard-write"></iframe>
         </div>
         <div class="buyers">
           <div class="buyers-tabs" role="tablist">
@@ -109,6 +107,9 @@
             </button>
             <button data-view="events" class="buyers-tab">
               履歴 (<span id="events-count">0</span>)
+            </button>
+            <button data-view="token-info" class="buyers-tab">
+              Token Info
             </button>
           </div>
           <div class="buyers-view" data-view="buyers">
@@ -130,6 +131,10 @@
               <span class="num">金額</span>
             </div>
             <ul id="events-list"></ul>
+          </div>
+          <div class="buyers-view token-info-view" data-view="token-info" hidden>
+            <div id="token-info-grid" class="token-info-grid"></div>
+            <div id="token-info-score" class="token-info-score"></div>
           </div>
         </div>
       </div>

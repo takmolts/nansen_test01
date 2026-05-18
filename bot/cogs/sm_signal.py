@@ -29,7 +29,7 @@ import discord
 from discord.ext import commands
 
 from bot.config import Config
-from bot.links import grok_token_link_md, trade_links_md, x_search_links_md
+from bot.links import research_links_md, trade_links_md, x_search_links_md
 from bot.sm_signal_classifier import (
     STABLE_LABELS,
     classify_swap,
@@ -590,7 +590,9 @@ def _build_signal_embed(
     x_md = x_search_links_md(sym, target_mint)
     if x_md:
         desc_lines.append(f"🔍 X：{x_md}")
-    desc_lines.append(f"🤖 {grok_token_link_md(sym, target_mint)}")
+    research_md = research_links_md(sym, target_mint)
+    if research_md:
+        desc_lines.append(f"🔎 {research_md}")
     desc_lines.append(f"🔗 Trade：{trade_links_md(target_mint, chain='solana')}")
     desc_lines.append(f"👛 wallet：{wallet_line}")
     sig = event.get("signature") or ""

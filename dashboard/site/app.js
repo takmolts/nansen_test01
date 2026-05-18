@@ -61,6 +61,8 @@ const els = {
   backBtn: document.getElementById("back-btn"),
   copyCaBtn: document.getElementById("copy-ca-btn"),
   snapshotBtn: document.getElementById("snapshot-btn"),
+  grokBtn: document.getElementById("grok-btn"),
+  deepnetsBtn: document.getElementById("deepnets-btn"),
   toast: document.getElementById("toast"),
 };
 
@@ -134,6 +136,19 @@ function currentBucket() {
 function externalUrl(mint, source) {
   if (source === "birdeye") return `https://birdeye.so/token/${encodeURIComponent(mint)}?chain=solana`;
   return `https://dexscreener.com/solana/${encodeURIComponent(mint)}`;
+}
+
+// bot/links.py の make_grok_narrative_url と同じクエリ生成
+function grokNarrativeUrl(symbol, mint) {
+  const parts = [];
+  if (symbol) parts.push(`$${symbol}`);
+  if (mint) parts.push(`(CA: ${mint})`);
+  parts.push("のナラティブと最新動向を教えて");
+  return `https://grok.com/?q=${encodeURIComponent(parts.join(" "))}`;
+}
+
+function deepnetsUrl(mint) {
+  return `https://deepnets.ai/token/${encodeURIComponent(mint)}`;
 }
 
 // --- data loading ---
@@ -302,6 +317,10 @@ function selectToken(mint) {
     `last ${fmtAgo(t.last_seen_ts)}`,
   ].filter(Boolean).join(" · ");
   els.detailStats.textContent = stats;
+
+  const symForLink = t.symbol && t.symbol !== "?" ? t.symbol : "";
+  if (els.grokBtn) els.grokBtn.href = grokNarrativeUrl(symForLink, t.mint);
+  if (els.deepnetsBtn) els.deepnetsBtn.href = deepnetsUrl(t.mint);
 
   updateChart();
   renderBuyers(t);
