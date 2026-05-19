@@ -8,6 +8,7 @@ import discord
 from discord.ext import commands
 
 from bot.config import Config
+from bot.views import RateWalletButton
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +49,9 @@ async def _run() -> None:
                 )
         except Exception:
             logger.exception("Slash コマンドの同期に失敗しました")
+
+    # 通知の rating ボタンを再起動後も有効化 (custom_id でハンドリング)
+    bot.add_dynamic_items(RateWalletButton)
 
     await bot.load_extension("bot.cogs.check")
     await bot.load_extension("bot.cogs.digest")

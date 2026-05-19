@@ -37,6 +37,7 @@ from bot.sm_signal_classifier import (
     wallet_net_by_mint,
 )
 from bot.token_info import TokenInfo, get_token_info
+from bot.views import build_rating_view
 from bot.wallet_db import WalletDB
 
 logger = logging.getLogger(__name__)
@@ -494,7 +495,7 @@ class SmSignalCog(commands.Cog):
             others_ratings=others_ratings,
         )
         try:
-            await thread.send(embed=embed)
+            await thread.send(embed=embed, view=build_rating_view(wallet))
         except Exception:
             logger.exception("[sm_signal] 通知投稿失敗")
 

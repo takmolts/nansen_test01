@@ -12,6 +12,62 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+class RateWalletButton(
+    discord.ui.DynamicItem[discord.ui.Button],
+    template=r"smr:(?P<wallet>[^:]+):(?P<n>[1-5])",
+):
+    """wallet に rating(1-5) をワンクリックで付与する persistent ボタン。
+
+    custom_id に wallet と rating を埋め込むことで、 bot 再起動後も
+    `bot.add_dynamic_items(RateWalletButton)` 登録だけで全通知のボタンが効く。
+    """
+
+    def __init__(self, wallet: str, n: int):
+        self.wallet = wallet
+        self.n = n
+        super().__init__(
+            discord.ui.Button(
+                label="★" * n,
+                style=discord.ButtonStyle.secondary,
+                custom_id=f"smr:{wallet}:{n}",
+            )
+        )
+
+    @classmethod
+    async def from_custom_id(cls, interaction, item, match):
+        return cls(match["wallet"], int(match["n"]))
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        # 遅延 import (views.py -> wallet_db の循環を避ける)
+        from bot.wallet_db import WalletDB
+
+        try:
+            async with WalletDB() as db:
+                await db.set_wallet_rating(self.wallet, self.n)
+        except Exception:
+            logger.exception("rate ボタン: DB 更新失敗 wallet=%s", self.wallet)
+            await interaction.response.send_message(
+                "レーティングの保存に失敗しました。", ephemeral=True
+            )
+            return
+        short = (
+            f"{self.wallet[:4]}…{self.wallet[-4:]}"
+            if len(self.wallet) > 10 else self.wallet
+        )
+        await interaction.response.send_message(
+            f"`{short}` を {'⭐' * self.n} (rating={self.n}) に設定しました。",
+            ephemeral=True,
+        )
+
+
+def build_rating_view(wallet: str) -> discord.ui.View:
+    """★1〜★5 の 5 ボタンを並べた persistent View を返す。"""
+    view = discord.ui.View(timeout=None)
+    for n in range(1, 6):
+        view.add_item(RateWalletButton(wallet, n))
+    return view
+
+
 class ResultView(discord.ui.View):
     """結果メッセージにスコア根拠表示と削除ボタンを付ける View。
 
