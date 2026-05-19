@@ -133,6 +133,11 @@ a:hover { text-decoration: underline; }
   font-family: monospace;
 }
 
+.toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
 .list-toolbar {
   display: flex;
   align-items: center;

@@ -106,6 +106,9 @@ const els = {
   listToolbar: document.getElementById("list-toolbar"),
   listToolbarCount: document.getElementById("list-toolbar-count"),
   clearAllBtn: document.getElementById("clear-all-btn"),
+  exportBtn: document.getElementById("export-btn"),
+  importBtn: document.getElementById("import-btn"),
+  importFile: document.getElementById("import-file"),
   toast: document.getElementById("toast"),
 };
 
@@ -815,6 +818,96 @@ if (els.clearAllBtn) {
     }
     updateFavWatchCounts();
     renderList();
+  });
+}
+
+// --- お気に入り/監視リストのローカル書き出し・読み込み ---
+
+function exportLists() {
+  const payload = {
+    app: "nansen-sm-dashboard",
+    kind: "fav-watch-backup",
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    favorites: [...state.favorites],
+    watchlist: [...state.watchlist],
+  };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], {
+    type: "application/json",
+  });
+  const ts = new Date();
+  const pad = (n) => String(n).padStart(2, "0");
+  const name =
+    `dashboard-list-${ts.getFullYear()}${pad(ts.getMonth() + 1)}${pad(ts.getDate())}` +
+    `-${pad(ts.getHours())}${pad(ts.getMinutes())}.json`;
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  showToast(
+    `書き出しました（⭐${payload.favorites.length} / 📌${payload.watchlist.length}）`,
+  );
+}
+
+function importListsFromText(text) {
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    showToast("JSON の読み込みに失敗しました", "error");
+    return;
+  }
+  const fav = Array.isArray(data && data.favorites)
+    ? data.favorites.filter((x) => typeof x === "string")
+    : null;
+  const watch = Array.isArray(data && data.watchlist)
+    ? data.watchlist.filter((x) => typeof x === "string")
+    : null;
+  if (!fav && !watch) {
+    showToast("バックアップ形式ではありません", "error");
+    return;
+  }
+  if (
+    !confirm(
+      `読み込むと現在のリストを置き換えます。\n` +
+        `⭐ お気に入り ${state.favorites.size} → ${fav ? fav.length : state.favorites.size} 件\n` +
+        `📌 監視 ${state.watchlist.length} → ${watch ? watch.length : state.watchlist.length} 件\n` +
+        `続行しますか?`,
+    )
+  ) {
+    return;
+  }
+  if (fav) {
+    state.favorites = new Set(fav);
+    saveFavorites();
+  }
+  if (watch) {
+    state.watchlist = watch;
+    state.watchTokens = {};
+    saveWatchlist();
+  }
+  updateFavWatchCounts();
+  renderList();
+  showToast("リストを復元しました");
+}
+
+if (els.exportBtn) {
+  els.exportBtn.addEventListener("click", exportLists);
+}
+if (els.importBtn && els.importFile) {
+  els.importBtn.addEventListener("click", () => els.importFile.click());
+  els.importFile.addEventListener("change", () => {
+    const file = els.importFile.files && els.importFile.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => importListsFromText(String(reader.result || ""));
+    reader.onerror = () => showToast("ファイル読み込みエラー", "error");
+    reader.readAsText(file);
+    els.importFile.value = ""; // 同じファイルを再選択できるようリセット
   });
 }
 

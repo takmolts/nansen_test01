@@ -63,7 +63,12 @@
       </div>
       <div id="list-toolbar" class="list-toolbar" hidden>
         <span id="list-toolbar-count"></span>
-        <button id="clear-all-btn" class="action-btn danger">🗑 全削除</button>
+        <div class="toolbar-actions">
+          <button id="export-btn" class="action-btn" title="お気に入り+監視リストを JSON ファイルに保存">⬇ 書き出し</button>
+          <button id="import-btn" class="action-btn" title="JSON ファイルから復元（現在のリストを置き換え）">⬆ 読み込み</button>
+          <input id="import-file" type="file" accept="application/json,.json" hidden />
+          <button id="clear-all-btn" class="action-btn danger">🗑 全削除</button>
+        </div>
       </div>
       <ul id="token-list" class="token-list"></ul>
       <p id="empty-msg" class="empty-msg" hidden>該当銘柄がありません</p>
