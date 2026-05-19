@@ -436,7 +436,12 @@ def _build_token_embed(r: dict, *, rank: int) -> discord.Embed:
             w = b.get("wallet") or ""
             short = _short(w)
             lbl = b.get("label")
-            return f"{short} ({lbl})" if isinstance(lbl, str) and lbl else short
+            base = f"{short} ({lbl})" if isinstance(lbl, str) and lbl else short
+            try:
+                n = int(b.get("rating") or 0)
+            except (TypeError, ValueError):
+                n = 0
+            return f"{'⭐' * n} {base}" if n else base
 
         sample = ", ".join(_disp(b) for b in buyers[:5])
         more = f" +{len(buyers)-5}" if len(buyers) > 5 else ""

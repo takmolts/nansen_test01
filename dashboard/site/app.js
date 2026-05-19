@@ -5,15 +5,50 @@ const WINDOWS = ["1h", "6h", "24h", "7d"];
 const DATA_BASE = "./data";
 
 const state = {
-  window: "1h",
+  window: "1h", // "1h"|"6h"|"24h"|"7d"|"fav"|"watch"
   sort: "distinct_buyers",
   minBuyers: 1,
   search: "",
   source: "dexscreener",
   selectedMint: null,
   payloads: {}, // window -> payload
-  buyersView: "buyers", // "buyers" | "events"
+  buyersView: "buyers", // "buyers" | "events" | "token-info"
+  favorites: new Set(), // mint の集合 (localStorage)
+  watchlist: [], // 任意登録 mint の配列 (localStorage, 追加順)
+  watchTokens: {}, // mint -> DexScreener から組んだ token (watch タブ用キャッシュ)
 };
+
+const TIME_WINDOWS = ["1h", "6h", "24h", "7d"];
+const FAV_KEY = "dashboard:favorites";
+const WATCH_KEY = "dashboard:watchlist";
+
+function loadFavWatch() {
+  try {
+    const f = JSON.parse(localStorage.getItem(FAV_KEY) || "[]");
+    if (Array.isArray(f)) state.favorites = new Set(f.filter((x) => typeof x === "string"));
+  } catch {}
+  try {
+    const w = JSON.parse(localStorage.getItem(WATCH_KEY) || "[]");
+    if (Array.isArray(w)) state.watchlist = w.filter((x) => typeof x === "string");
+  } catch {}
+}
+function saveFavorites() {
+  try { localStorage.setItem(FAV_KEY, JSON.stringify([...state.favorites])); } catch {}
+}
+function saveWatchlist() {
+  try { localStorage.setItem(WATCH_KEY, JSON.stringify(state.watchlist)); } catch {}
+}
+function isFav(mint) { return state.favorites.has(mint); }
+function toggleFav(mint) {
+  if (state.favorites.has(mint)) state.favorites.delete(mint);
+  else state.favorites.add(mint);
+  saveFavorites();
+  updateFavWatchCounts();
+}
+function updateFavWatchCounts() {
+  if (els.favCount) els.favCount.textContent = state.favorites.size;
+  if (els.watchCount) els.watchCount.textContent = state.watchlist.length;
+}
 
 // window -> DexScreener bucket key
 const WINDOW_TO_BUCKET = {
@@ -63,6 +98,11 @@ const els = {
   snapshotBtn: document.getElementById("snapshot-btn"),
   grokBtn: document.getElementById("grok-btn"),
   deepnetsBtn: document.getElementById("deepnets-btn"),
+  favCount: document.getElementById("fav-count"),
+  watchCount: document.getElementById("watch-count"),
+  watchAdd: document.getElementById("watch-add"),
+  watchInput: document.getElementById("watch-input"),
+  watchAddBtn: document.getElementById("watch-add-btn"),
   toast: document.getElementById("toast"),
 };
 
@@ -201,71 +241,128 @@ function applySort(tokens) {
   return arr;
 }
 
-function renderList() {
-  const payload = state.payloads[state.window];
-  if (!payload) return;
-  const tokens = applySort(applyFilters(payload.tokens || []));
+// 1 銘柄ぶんの <li> を生成。 isWatch=true は DexScreener 由来 (bot 集計なし)。
+function createTokenRow(t, { isWatch = false } = {}) {
+  const li = document.createElement("li");
+  li.dataset.mint = t.mint;
+  if (state.selectedMint === t.mint) li.classList.add("selected");
 
-  els.list.innerHTML = "";
-  if (tokens.length === 0) {
-    els.emptyMsg.hidden = false;
-    return;
-  }
-  els.emptyMsg.hidden = true;
+  const star = document.createElement("button");
+  star.className = "fav-star" + (isFav(t.mint) ? " on" : "");
+  star.textContent = isFav(t.mint) ? "⭐" : "☆";
+  star.title = "お気に入り";
+  star.addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    toggleFav(t.mint);
+    star.classList.toggle("on", isFav(t.mint));
+    star.textContent = isFav(t.mint) ? "⭐" : "☆";
+    if (state.window === "fav") renderList();
+  });
 
-  const frag = document.createDocumentFragment();
-  for (const t of tokens) {
-    const li = document.createElement("li");
-    li.dataset.mint = t.mint;
-    if (state.selectedMint === t.mint) li.classList.add("selected");
+  const img = document.createElement("img");
+  img.className = "icon";
+  img.alt = "";
+  img.src = t.image_url || "";
+  img.onerror = () => { img.style.visibility = "hidden"; };
 
-    const img = document.createElement("img");
-    img.className = "icon";
-    img.alt = "";
-    img.src = t.image_url || "";
-    img.onerror = () => { img.style.visibility = "hidden"; };
-
-    const info = document.createElement("div");
-    info.className = "info";
-    const sym = t.symbol || shortAddr(t.mint);
-    const bucket = currentBucket();
-    const vol = t.volume && t.volume[bucket];
-    const tx = t.txns && t.txns[bucket];
-    const txTotal = tx ? (tx.buys || 0) + (tx.sells || 0) : null;
-    const age = fmtAgeFromMs(t.pair_created_at_ms);
-    const bucketLabel = BUCKET_LABEL[bucket];
-    info.innerHTML = `
-      <div class="symbol-row">
-        <span class="sym">${escapeHtml(sym)}</span>
-        <span class="name">${escapeHtml(t.name || "")}</span>
-      </div>
-      <div class="stats">
+  const info = document.createElement("div");
+  info.className = "info";
+  const sym = t.symbol || shortAddr(t.mint);
+  const bucket = currentBucket();
+  const vol = t.volume && t.volume[bucket];
+  const tx = t.txns && t.txns[bucket];
+  const txTotal = tx ? (tx.buys || 0) + (tx.sells || 0) : null;
+  const age = fmtAgeFromMs(t.pair_created_at_ms);
+  const bucketLabel = BUCKET_LABEL[bucket];
+  const statsRow = isWatch
+    ? `<div class="stats"><span class="muted-tag">📌 監視 (bot 集計外)</span></div>`
+    : `<div class="stats">
         <span class="buy">👥 ${t.distinct_buyers}</span>
         <span>SOL ${fmtNum(t.sum_buy_sol)}</span>
         <span>$${fmtNum(t.sum_buy_stable)}</span>
         ${t.n_large_buys ? `<span class="warn">🐋 ${t.n_large_buys}</span>` : ""}
-      </div>
-      <div class="dex-stats">
-        ${t.market_cap != null ? `<span>MC $${fmtNum(t.market_cap)}</span>` : ""}
-        ${vol != null ? `<span title="DexScreener ${bucketLabel} volume">Vol $${fmtNum(vol)}</span>` : ""}
-        ${t.liquidity_usd != null ? `<span title="Liquidity (USD)">LIQ $${fmtNum(t.liquidity_usd)}</span>` : ""}
-        ${txTotal != null ? `<span title="${bucketLabel} buys/sells">${txTotal}tx</span>` : ""}
-        ${age ? `<span title="Pair age">⏱ ${age}</span>` : ""}
-      </div>
-    `;
+      </div>`;
+  info.innerHTML = `
+    <div class="symbol-row">
+      <span class="sym">${escapeHtml(sym)}</span>
+      <span class="name">${escapeHtml(t.name || "")}</span>
+    </div>
+    ${statsRow}
+    <div class="dex-stats">
+      ${t.market_cap != null ? `<span>MC $${fmtNum(t.market_cap)}</span>` : ""}
+      ${vol != null ? `<span title="DexScreener ${bucketLabel} volume">Vol $${fmtNum(vol)}</span>` : ""}
+      ${t.liquidity_usd != null ? `<span title="Liquidity (USD)">LIQ $${fmtNum(t.liquidity_usd)}</span>` : ""}
+      ${txTotal != null ? `<span title="${bucketLabel} buys/sells">${txTotal}tx</span>` : ""}
+      ${age ? `<span title="Pair age">⏱ ${age}</span>` : ""}
+    </div>
+  `;
 
-    const right = document.createElement("div");
-    right.className = "right";
+  const right = document.createElement("div");
+  right.className = "right";
+  if (isWatch) {
+    const del = document.createElement("button");
+    del.className = "watch-del";
+    del.textContent = "×";
+    del.title = "監視リストから削除";
+    del.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      state.watchlist = state.watchlist.filter((m) => m !== t.mint);
+      saveWatchlist();
+      updateFavWatchCounts();
+      renderList();
+    });
+    right.append(del);
+  } else {
     right.innerHTML = `
       <span class="big">${t.buy_trades}txn</span>
       ${fmtAgo(t.last_seen_ts)}
     `;
-
-    li.append(img, info, right);
-    li.addEventListener("click", () => selectToken(t.mint));
-    frag.append(li);
   }
+
+  li.append(star, img, info, right);
+  li.addEventListener("click", () => selectToken(t.mint));
+  return li;
+}
+
+function renderRows(tokens, { isWatch = false } = {}) {
+  els.list.innerHTML = "";
+  if (!tokens.length) {
+    els.emptyMsg.hidden = false;
+    return;
+  }
+  els.emptyMsg.hidden = true;
+  const frag = document.createDocumentFragment();
+  for (const t of tokens) frag.append(createTokenRow(t, { isWatch }));
   els.list.append(frag);
+}
+
+// fav タブ: 全 time window から favorites の token を集約 (1h 優先で最初に見つかったもの)
+function collectFavoriteTokens() {
+  const seen = new Map();
+  for (const w of TIME_WINDOWS) {
+    const p = state.payloads[w];
+    if (!p) continue;
+    for (const t of p.tokens || []) {
+      if (state.favorites.has(t.mint) && !seen.has(t.mint)) seen.set(t.mint, t);
+    }
+  }
+  return [...seen.values()];
+}
+
+function renderList() {
+  els.watchAdd.hidden = state.window !== "watch";
+
+  if (state.window === "watch") {
+    renderWatchlist();
+    return;
+  }
+  if (state.window === "fav") {
+    renderRows(applySort(applyFilters(collectFavoriteTokens())));
+    return;
+  }
+  const payload = state.payloads[state.window];
+  if (!payload) return;
+  renderRows(applySort(applyFilters(payload.tokens || [])));
 }
 
 function renderHeader(payload, meta) {
@@ -282,9 +379,115 @@ function renderHeader(payload, meta) {
 }
 
 function findToken(mint) {
+  // watch タブ / watch キャッシュ優先
+  if (state.watchTokens[mint]) return state.watchTokens[mint];
+  // 現 window
   const payload = state.payloads[state.window];
-  if (!payload) return null;
-  return (payload.tokens || []).find((t) => t.mint === mint) || null;
+  const hit = payload && (payload.tokens || []).find((t) => t.mint === mint);
+  if (hit) return hit;
+  // fav タブ等は全 window を横断
+  for (const w of TIME_WINDOWS) {
+    const p = state.payloads[w];
+    const h = p && (p.tokens || []).find((t) => t.mint === mint);
+    if (h) return h;
+  }
+  return null;
+}
+
+// DexScreener pair → ダッシュボード token 形式 (token_info.py の抽出と等価)
+function dexPairToToken(mint, pair) {
+  const base = pair && pair.baseToken;
+  const info = pair && pair.info;
+  const num = (v) => {
+    const n = parseFloat(v);
+    return Number.isFinite(n) ? n : null;
+  };
+  const bucket = (obj) => {
+    if (!obj || typeof obj !== "object") return null;
+    const out = {};
+    for (const k of ["m5", "h1", "h6", "h24"]) {
+      const v = num(obj[k]);
+      if (v != null) out[k] = v;
+    }
+    return Object.keys(out).length ? out : null;
+  };
+  const txnsObj = (obj) => {
+    if (!obj || typeof obj !== "object") return null;
+    const out = {};
+    for (const k of ["m5", "h1", "h6", "h24"]) {
+      const s = obj[k];
+      if (s && typeof s === "object") {
+        out[k] = { buys: parseInt(s.buys || 0, 10), sells: parseInt(s.sells || 0, 10) };
+      }
+    }
+    return Object.keys(out).length ? out : null;
+  };
+  const img = info && typeof info.imageUrl === "string" && info.imageUrl.startsWith("http")
+    ? info.imageUrl : "";
+  return {
+    mint,
+    symbol: base && base.symbol ? base.symbol : null,
+    name: base && base.name ? base.name : null,
+    image_url: img,
+    market_cap: num(pair && (pair.marketCap ?? pair.fdv)),
+    price_usd: num(pair && pair.priceUsd),
+    liquidity_usd: num(pair && pair.liquidity && pair.liquidity.usd),
+    volume: bucket(pair && pair.volume),
+    txns: txnsObj(pair && pair.txns),
+    price_change: bucket(pair && pair.priceChange),
+    pair_created_at_ms: pair && pair.pairCreatedAt ? Number(pair.pairCreatedAt) : null,
+    // bot 集計フィールドは無し (watch は監視外)
+    buyers: [],
+    events: [],
+    _watch: true,
+  };
+}
+
+async function fetchDexToken(mint) {
+  const res = await fetch(
+    `https://api.dexscreener.com/latest/dex/tokens/${encodeURIComponent(mint)}`
+  );
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const json = await res.json();
+  const pairs = json && Array.isArray(json.pairs) ? json.pairs : [];
+  if (!pairs.length) return null;
+  return dexPairToToken(mint, pairs[0]);
+}
+
+async function renderWatchlist() {
+  if (!state.watchlist.length) {
+    els.list.innerHTML = "";
+    els.emptyMsg.hidden = false;
+    els.emptyMsg.textContent = "監視 CA がありません。 上の入力欄から追加してください";
+    return;
+  }
+  els.emptyMsg.hidden = true;
+  // 取得済みは即描画、 未取得は並列 fetch
+  const missing = state.watchlist.filter((m) => !state.watchTokens[m]);
+  const tokens0 = state.watchlist
+    .map((m) => state.watchTokens[m])
+    .filter(Boolean);
+  if (tokens0.length) renderRows(applySort(tokens0), { isWatch: true });
+
+  if (missing.length) {
+    const results = await Promise.allSettled(missing.map((m) => fetchDexToken(m)));
+    results.forEach((r, i) => {
+      const mint = missing[i];
+      if (r.status === "fulfilled" && r.value) {
+        state.watchTokens[mint] = r.value;
+      } else {
+        // 取得失敗でも行は出す (CA だけ表示)
+        state.watchTokens[mint] = {
+          mint, symbol: null, name: "(取得失敗)", image_url: "",
+          buyers: [], events: [], _watch: true,
+        };
+      }
+    });
+    if (state.window === "watch") {
+      const tokens = state.watchlist.map((m) => state.watchTokens[m]).filter(Boolean);
+      renderRows(applySort(tokens), { isWatch: true });
+    }
+  }
 }
 
 function selectToken(mint) {
@@ -339,6 +542,11 @@ function updateChart() {
   });
 }
 
+function starsStr(r) {
+  const n = parseInt(r, 10);
+  return Number.isFinite(n) && n > 0 ? "⭐".repeat(n) : "";
+}
+
 function renderBuyers(t) {
   const buyers = t.buyers || [];
   els.buyersCount.textContent = buyers.length;
@@ -352,8 +560,9 @@ function renderBuyers(t) {
     const labelHtml = b.label
       ? `<span class="label-cell" title="${escapeHtml(b.label)}">${escapeHtml(b.label)}</span>`
       : `<span class="label-cell empty">-</span>`;
+    const star = starsStr(b.rating);
     li.innerHTML = `
-      <span class="wallet" title="${escapeHtml(b.wallet || "")}">${shortAddr(b.wallet)}</span>
+      <span class="wallet" title="${escapeHtml(b.wallet || "")}">${star ? `<span class="rating">${star}</span> ` : ""}${shortAddr(b.wallet)}</span>
       ${labelHtml}
       <span class="trades">${b.trades || 0}</span>
       <span class="amount">${amount}</span>
@@ -390,7 +599,7 @@ function renderEvents(t) {
         <span class="ago">${fmtAgo(ev.ts)}</span>
       </span>
       <span class="dir ${isBuy ? "buy" : "sell"}">${isBuy ? "BUY" : "SELL"}</span>
-      <span class="wallet" title="${escapeHtml(ev.wallet || "")}">${shortAddr(ev.wallet)}</span>
+      <span class="wallet" title="${escapeHtml(ev.wallet || "")}">${(() => { const s = starsStr(ev.rating); return s ? `<span class="rating">${s}</span> ` : ""; })()}${shortAddr(ev.wallet)}</span>
       ${labelHtml}
       <span class="amount ${isBuy ? "buy" : "sell"}">${amount}${ev.is_large ? " 🐋" : ""}</span>
     `;
@@ -525,11 +734,48 @@ els.tabs.forEach((btn) => {
     els.chartDetail.hidden = true;
     els.chartEmpty.hidden = false;
     document.body.classList.remove("show-detail");
-    await loadWindow(state.window);
-    renderHeader(state.payloads[state.window], state._meta);
+    if (state.window === "fav") {
+      // fav は全 time window を横断するので全部ロード
+      await Promise.all(TIME_WINDOWS.map((w) => loadWindow(w)));
+    } else if (state.window === "watch") {
+      // watch は DexScreener 直 fetch (renderList 内)
+    } else {
+      await loadWindow(state.window);
+      renderHeader(state.payloads[state.window], state._meta);
+    }
     renderList();
   });
 });
+
+if (els.watchAddBtn) {
+  const addWatch = () => {
+    const v = (els.watchInput.value || "").trim();
+    if (!v) return;
+    // CA らしき文字列のみ (Solana base58, ざっくり 32-44 文字)
+    if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(v)) {
+      showToast("CA 形式が不正です", "error");
+      return;
+    }
+    if (state.watchlist.includes(v)) {
+      showToast("既に登録済みです");
+    } else {
+      state.watchlist.push(v);
+      saveWatchlist();
+      updateFavWatchCounts();
+    }
+    els.watchInput.value = "";
+    if (state.window === "watch") renderList();
+    else {
+      els.tabs.forEach((b) => b.classList.toggle("active", b.dataset.window === "watch"));
+      state.window = "watch";
+      renderList();
+    }
+  };
+  els.watchAddBtn.addEventListener("click", addWatch);
+  els.watchInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") addWatch();
+  });
+}
 
 if (els.backBtn) {
   els.backBtn.addEventListener("click", () => {
@@ -731,12 +977,26 @@ async function reloadData({ silent = false } = {}) {
   _reloading = true;
   if (els.reloadBtn) els.reloadBtn.classList.add("spinning");
   try {
-    // 現 window のキャッシュを捨てて再 fetch (他 window は遅延 fetch でいい)
-    delete state.payloads[state.window];
-    const [meta] = await Promise.all([loadMeta(), loadWindow(state.window)]);
-    state._meta = meta;
-    renderHeader(state.payloads[state.window], meta);
-    renderList();
+    if (state.window === "watch") {
+      // watch は DexScreener 直 fetch なのでキャッシュを捨てて再取得
+      state.watchTokens = {};
+      renderList();
+    } else if (state.window === "fav") {
+      for (const w of TIME_WINDOWS) delete state.payloads[w];
+      const [meta] = await Promise.all([
+        loadMeta(),
+        ...TIME_WINDOWS.map((w) => loadWindow(w)),
+      ]);
+      state._meta = meta;
+      renderList();
+    } else {
+      // 現 window のキャッシュを捨てて再 fetch (他 window は遅延 fetch でいい)
+      delete state.payloads[state.window];
+      const [meta] = await Promise.all([loadMeta(), loadWindow(state.window)]);
+      state._meta = meta;
+      renderHeader(state.payloads[state.window], meta);
+      renderList();
+    }
     // 選択中の銘柄があれば最新データで再描画 (state を保てる範囲で)
     if (state.selectedMint) {
       const t = findToken(state.selectedMint);
@@ -816,6 +1076,8 @@ async function applyDeepLink() {
 // --- init ---
 
 (async function init() {
+  loadFavWatch();
+  updateFavWatchCounts();
   const [meta] = await Promise.all([loadMeta(), loadWindow(state.window)]);
   state._meta = meta;
   renderHeader(state.payloads[state.window], meta);

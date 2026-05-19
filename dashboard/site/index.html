@@ -32,6 +32,8 @@
       <button data-window="6h" class="tab">6h</button>
       <button data-window="24h" class="tab">24h</button>
       <button data-window="7d" class="tab">7d</button>
+      <button data-window="fav" class="tab special" title="お気に入り (この端末に保存)">⭐ <span id="fav-count">0</span></button>
+      <button data-window="watch" class="tab special" title="任意 CA 監視 (この端末に保存)">📌 <span id="watch-count">0</span></button>
     </div>
     <div class="control-group">
       <label for="sort">Sort</label>
@@ -55,6 +57,10 @@
 
   <main class="layout">
     <aside class="list-pane">
+      <div id="watch-add" class="watch-add" hidden>
+        <input id="watch-input" type="text" placeholder="CA (mint) を貼り付けて追加…" />
+        <button id="watch-add-btn" class="action-btn">+ 追加</button>
+      </div>
       <ul id="token-list" class="token-list"></ul>
       <p id="empty-msg" class="empty-msg" hidden>該当銘柄がありません</p>
     </aside>

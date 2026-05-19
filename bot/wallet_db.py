@@ -105,7 +105,64 @@ class WalletDB:
                 ON sm_signal_events(wallet);
             """
         )
+        await self._ensure_columns()
         await self._conn.commit()
+
+    async def _ensure_columns(self) -> None:
+        """既存 DB への列追加マイグレーション (冪等)。"""
+        assert self._conn is not None
+        # sm_roster.rating: 手動レーティング (1-5)。 NULL=未評価。
+        async with self._conn.execute("PRAGMA table_info(sm_roster)") as cur:
+            cols = {row[1] for row in await cur.fetchall()}
+        if "rating" not in cols:
+            await self._conn.execute(
+                "ALTER TABLE sm_roster ADD COLUMN rating INTEGER"
+            )
+        if "rating_note" not in cols:
+            await self._conn.execute(
+                "ALTER TABLE sm_roster ADD COLUMN rating_note TEXT"
+            )
+
+    async def set_wallet_rating(
+        self, wallet: str, rating: int | None, *, note: str | None = None
+    ) -> None:
+        """wallet に手動レーティング (1-5, None で解除) を設定。
+
+        sm_roster に行が無ければ最小限の値で作成してから rating を入れる。
+        """
+        assert self._conn is not None
+        now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        await self._conn.execute(
+            """
+            INSERT INTO sm_roster (wallet_address, first_seen_at, last_seen_at,
+                                   total_observations, rating, rating_note)
+            VALUES (?, ?, ?, 0, ?, ?)
+            ON CONFLICT(wallet_address) DO UPDATE SET
+                rating = excluded.rating,
+                rating_note = excluded.rating_note
+            """,
+            (wallet, now_iso, now_iso, rating, note),
+        )
+        await self._conn.commit()
+
+    async def get_wallet_ratings(self) -> dict[str, int]:
+        """rating が設定された wallet の {wallet_address: rating} dict。"""
+        assert self._conn is not None
+        async with self._conn.execute(
+            "SELECT wallet_address, rating FROM sm_roster "
+            "WHERE rating IS NOT NULL"
+        ) as cur:
+            return {row[0]: int(row[1]) for row in await cur.fetchall()}
+
+    async def list_rated_wallets(self) -> list[aiosqlite.Row]:
+        """rating 付き wallet 一覧 (rating 降順)。"""
+        assert self._conn is not None
+        async with self._conn.execute(
+            "SELECT wallet_address, rating, rating_note, last_label "
+            "FROM sm_roster WHERE rating IS NOT NULL "
+            "ORDER BY rating DESC, wallet_address"
+        ) as cur:
+            return await cur.fetchall()
 
     async def insert_appearances(self, rows: Iterable[dict[str, Any]]) -> int:
         """pnl-leaderboard レコードを bulk insert する。 件数を返す。"""
@@ -484,7 +541,8 @@ class WalletDB:
             SUM(CASE WHEN e.quote_label IN ('USDC','USDT','USD1')
                      THEN ABS(e.quote_change) ELSE 0 END)                AS sum_stable,
             MAX(e.block_ts)                                              AS last_ts,
-            MAX(r.last_label)                                            AS label
+            MAX(r.last_label)                                            AS label,
+            MAX(r.rating)                                                AS rating
         FROM sm_signal_events e
         LEFT JOIN sm_roster r ON r.wallet_address = e.wallet
         WHERE e.target_mint = ? AND e.direction = 'BUY' AND e.block_ts >= ?
@@ -516,7 +574,8 @@ class WalletDB:
             e.quote_change              AS quote_change,
             e.target_change             AS target_change,
             e.is_large                  AS is_large,
-            r.last_label                AS label
+            r.last_label                AS label,
+            r.rating                    AS rating
         FROM sm_signal_events e
         LEFT JOIN sm_roster r ON r.wallet_address = e.wallet
         WHERE e.target_mint = ? AND e.block_ts >= ?

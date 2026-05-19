@@ -95,6 +95,9 @@ async def _build_window_payload(
                 {
                     "wallet": b.get("wallet"),
                     "label": b.get("label"),
+                    "rating": (
+                        int(b["rating"]) if b.get("rating") is not None else None
+                    ),
                     "trades": int(b.get("trades") or 0),
                     "sum_sol": float(b.get("sum_sol") or 0.0),
                     "sum_stable": float(b.get("sum_stable") or 0.0),
@@ -107,6 +110,9 @@ async def _build_window_payload(
                     "ts": int(e.get("block_ts") or 0),
                     "wallet": e.get("wallet"),
                     "label": e.get("label"),
+                    "rating": (
+                        int(e["rating"]) if e.get("rating") is not None else None
+                    ),
                     "direction": e.get("direction"),
                     "quote_label": e.get("quote_label"),
                     "quote_change": float(e.get("quote_change") or 0.0),

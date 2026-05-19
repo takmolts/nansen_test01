@@ -123,6 +123,7 @@ class SmSignalCog(commands.Cog):
         self.config = config
         self._sm_wallets: set[str] = set()
         self._sm_wallet_labels: dict[str, str] = {}
+        self._sm_wallet_ratings: dict[str, int] = {}
         self._wallets_last_refresh: float = 0.0
         self._state = _SignalState(
             dedup_window_sec=config.sm_signal_dedup_window_min * 60,
@@ -240,8 +241,10 @@ class SmSignalCog(commands.Cog):
             async with WalletDB() as db:
                 wallets = await db.list_all_sm_wallets()
                 labels = await db.get_sm_wallet_labels()
+                ratings = await db.get_wallet_ratings()
             self._sm_wallets = set(wallets)
             self._sm_wallet_labels = labels
+            self._sm_wallet_ratings = ratings
             self._wallets_last_refresh = now
             logger.debug(
                 "[sm_signal] sm wallets refreshed: %d (labels=%d)",
@@ -475,6 +478,8 @@ class SmSignalCog(commands.Cog):
 
         wallet_label = self._sm_wallet_labels.get(wallet)
         others_labels = {w: self._sm_wallet_labels.get(w) for w in others}
+        wallet_rating = self._sm_wallet_ratings.get(wallet)
+        others_ratings = {w: self._sm_wallet_ratings.get(w) for w in others}
 
         embed = _build_signal_embed(
             event=event,
@@ -485,6 +490,8 @@ class SmSignalCog(commands.Cog):
             token_info=token_info,
             wallet_label=wallet_label,
             others_labels=others_labels,
+            wallet_rating=wallet_rating,
+            others_ratings=others_ratings,
         )
         try:
             await thread.send(embed=embed)
@@ -526,6 +533,15 @@ def _fmt_usd(v: float) -> str:
     return f"{sign}${a:.0f}"
 
 
+def _stars(rating: int | None) -> str:
+    """rating(1-5) を ⭐ 文字列に。 None/0 は空文字。"""
+    try:
+        n = int(rating) if rating else 0
+    except (TypeError, ValueError):
+        n = 0
+    return "⭐" * n
+
+
 def _build_signal_embed(
     *,
     event: dict[str, Any],
@@ -536,6 +552,8 @@ def _build_signal_embed(
     token_info: TokenInfo | None = None,
     wallet_label: str | None = None,
     others_labels: dict[str, str | None] | None = None,
+    wallet_rating: int | None = None,
+    others_ratings: dict[str, int | None] | None = None,
 ) -> discord.Embed:
     direction = cls["direction"]
     target_mint = cls["target_mint"]
@@ -554,7 +572,8 @@ def _build_signal_embed(
     wallet_disp = _short(wallet)
     if wallet_label:
         wallet_disp = f"{wallet_disp} ({wallet_label})"
-    title = f"{dir_emoji} {dir_word}  ·  {wallet_disp}"
+    rating_prefix = f"{_stars(wallet_rating)} " if wallet_rating else ""
+    title = f"{dir_emoji} {dir_word}  ·  {rating_prefix}{wallet_disp}"
 
     embed = discord.Embed(title=title, color=color)
     if token_info and token_info.image_url:
@@ -576,6 +595,8 @@ def _build_signal_embed(
     nansen_url = f"https://app.nansen.ai/profiler/{wallet}?chain=solana"
     solscan_wallet = f"https://solscan.io/account/{wallet}"
     wallet_line = f"`{_short(wallet)}`"
+    if wallet_rating:
+        wallet_line += f" {_stars(wallet_rating)}"
     if wallet_label:
         wallet_line += f" **{wallet_label}**"
     wallet_line += f" · [solscan]({solscan_wallet}) · [Nansen]({nansen_url})"
@@ -613,11 +634,14 @@ def _build_signal_embed(
     # 群衆メンバー詳細 (label 付きで表示)。 名前数が多くなるので field のまま
     if others:
         ol = others_labels or {}
+        orr = others_ratings or {}
         items: list[str] = []
         for w in list(others)[:5]:
             short = _short(w)
             lbl = ol.get(w)
-            items.append(f"{short} ({lbl})" if lbl else short)
+            star = _stars(orr.get(w))
+            disp = f"{short} ({lbl})" if lbl else short
+            items.append(f"{star} {disp}" if star else disp)
         sample = ", ".join(items)
         more = f" ほか {len(others)-5}" if len(others) > 5 else ""
         embed.add_field(

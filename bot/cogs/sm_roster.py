@@ -467,6 +467,123 @@ class SmRosterCog(commands.Cog):
         )
         await interaction.followup.send(embed=embed)
 
+    def _channel_blocked(self, interaction: discord.Interaction) -> bool:
+        return bool(
+            self.config.allowed_channel_ids
+            and interaction.channel_id not in self.config.allowed_channel_ids
+        )
+
+    @app_commands.command(
+        name="sm-rate",
+        description="wallet に手動レーティング (1-5) を付けます。 通知/ダッシュボードに ⭐ 表示",
+    )
+    @app_commands.describe(
+        wallet="対象 wallet アドレス",
+        rating="1〜5 (高いほど良い)",
+        note="任意メモ (なぜ良い wallet か等)",
+    )
+    async def sm_rate(
+        self,
+        interaction: discord.Interaction,
+        wallet: str,
+        rating: app_commands.Range[int, 1, 5],
+        note: str | None = None,
+    ):
+        if self._channel_blocked(interaction):
+            await interaction.response.send_message(
+                "このチャネルではコマンドが許可されていません。", ephemeral=True
+            )
+            return
+        wallet = wallet.strip()
+        if not wallet:
+            await interaction.response.send_message(
+                "wallet アドレスを指定してください。", ephemeral=True
+            )
+            return
+        await interaction.response.defer(thinking=True, ephemeral=True)
+        try:
+            async with WalletDB() as db:
+                await db.set_wallet_rating(wallet, int(rating), note=note)
+        except Exception:
+            logger.exception("/sm-rate 失敗 wallet=%s", wallet)
+            await interaction.followup.send(
+                "DB 更新でエラーが発生しました。", ephemeral=True
+            )
+            return
+        stars = "⭐" * int(rating)
+        msg = f"`{wallet}` を {stars} (rating={int(rating)}) に設定しました。"
+        if note:
+            msg += f"\nメモ: {note}"
+        await interaction.followup.send(msg, ephemeral=True)
+
+    @app_commands.command(
+        name="sm-unrate",
+        description="wallet の手動レーティングを解除します",
+    )
+    @app_commands.describe(wallet="対象 wallet アドレス")
+    async def sm_unrate(self, interaction: discord.Interaction, wallet: str):
+        if self._channel_blocked(interaction):
+            await interaction.response.send_message(
+                "このチャネルではコマンドが許可されていません。", ephemeral=True
+            )
+            return
+        wallet = wallet.strip()
+        await interaction.response.defer(thinking=True, ephemeral=True)
+        try:
+            async with WalletDB() as db:
+                await db.set_wallet_rating(wallet, None, note=None)
+        except Exception:
+            logger.exception("/sm-unrate 失敗 wallet=%s", wallet)
+            await interaction.followup.send(
+                "DB 更新でエラーが発生しました。", ephemeral=True
+            )
+            return
+        await interaction.followup.send(
+            f"`{wallet}` のレーティングを解除しました。", ephemeral=True
+        )
+
+    @app_commands.command(
+        name="sm-ratings",
+        description="手動レーティング付き wallet 一覧を表示します",
+    )
+    async def sm_ratings(self, interaction: discord.Interaction):
+        if self._channel_blocked(interaction):
+            await interaction.response.send_message(
+                "このチャネルではコマンドが許可されていません。", ephemeral=True
+            )
+            return
+        await interaction.response.defer(thinking=True)
+        try:
+            async with WalletDB() as db:
+                rows = await db.list_rated_wallets()
+        except Exception:
+            logger.exception("/sm-ratings 失敗")
+            await interaction.followup.send(
+                "DB アクセスでエラーが発生しました。", ephemeral=True
+            )
+            return
+        if not rows:
+            await interaction.followup.send(
+                "レーティング済み wallet はありません。", ephemeral=True
+            )
+            return
+        lines: list[str] = []
+        for r in rows[:40]:
+            d = dict(r)
+            stars = "⭐" * int(d.get("rating") or 0)
+            label = d.get("last_label") or "-"
+            note = d.get("rating_note")
+            line = f"{stars} `{d['wallet_address']}` ({label})"
+            if note:
+                line += f" — {note}"
+            lines.append(line)
+        embed = discord.Embed(
+            title=f"⭐ レーティング済み wallet ({len(rows)})",
+            description="\n".join(lines),
+            color=0xFFD700,
+        )
+        await interaction.followup.send(embed=embed)
+
 
 def _build_summary_embed(summary: dict[str, Any], *, title_suffix: str = "") -> discord.Embed:
     color = 0x4CAF50 if summary["unique_wallets"] > 0 else 0x9E9E9E
