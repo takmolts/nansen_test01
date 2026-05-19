@@ -133,6 +133,20 @@ a:hover { text-decoration: underline; }
   font-family: monospace;
 }
 
+.list-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-2);
+  font-size: 12px;
+  color: var(--muted);
+}
+.action-btn.danger { color: var(--sell); border-color: rgba(255, 93, 108, 0.4); }
+.action-btn.danger:hover { background: rgba(255, 93, 108, 0.12); border-color: var(--sell); }
+
 select, input[type=number], input[type=search] {
   background: var(--bg-3);
   color: var(--text);

@@ -103,6 +103,9 @@ const els = {
   watchAdd: document.getElementById("watch-add"),
   watchInput: document.getElementById("watch-input"),
   watchAddBtn: document.getElementById("watch-add-btn"),
+  listToolbar: document.getElementById("list-toolbar"),
+  listToolbarCount: document.getElementById("list-toolbar-count"),
+  clearAllBtn: document.getElementById("clear-all-btn"),
   toast: document.getElementById("toast"),
 };
 
@@ -349,8 +352,23 @@ function collectFavoriteTokens() {
   return [...seen.values()];
 }
 
+function updateListToolbar() {
+  const w = state.window;
+  const show = w === "fav" || w === "watch";
+  els.listToolbar.hidden = !show;
+  if (!show) return;
+  if (w === "fav") {
+    els.listToolbarCount.textContent = `⭐ お気に入り ${state.favorites.size} 件`;
+    els.clearAllBtn.textContent = "🗑 全解除";
+  } else {
+    els.listToolbarCount.textContent = `📌 監視 ${state.watchlist.length} 件`;
+    els.clearAllBtn.textContent = "🗑 全削除";
+  }
+}
+
 function renderList() {
   els.watchAdd.hidden = state.window !== "watch";
+  updateListToolbar();
 
   if (state.window === "watch") {
     renderWatchlist();
@@ -774,6 +792,29 @@ if (els.watchAddBtn) {
   els.watchAddBtn.addEventListener("click", addWatch);
   els.watchInput.addEventListener("keydown", (e) => {
     if (e.key === "Enter") addWatch();
+  });
+}
+
+if (els.clearAllBtn) {
+  els.clearAllBtn.addEventListener("click", () => {
+    if (state.window === "fav") {
+      if (!state.favorites.size) return;
+      if (!confirm(`お気に入り ${state.favorites.size} 件をすべて解除しますか?`)) return;
+      state.favorites.clear();
+      saveFavorites();
+      showToast("お気に入りを全解除しました");
+    } else if (state.window === "watch") {
+      if (!state.watchlist.length) return;
+      if (!confirm(`監視 CA ${state.watchlist.length} 件をすべて削除しますか?`)) return;
+      state.watchlist = [];
+      state.watchTokens = {};
+      saveWatchlist();
+      showToast("監視リストを全削除しました");
+    } else {
+      return;
+    }
+    updateFavWatchCounts();
+    renderList();
   });
 }
 
