@@ -22,6 +22,27 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_DB_PATH = "data/wallets.db"
 
+# wallet スコアリング: 累積カテゴリ式。 各カテゴリは押された回数を保持する。
+SCORE_CATEGORIES: tuple[str, ...] = ("good", "vgood", "bad", "scam", "bot")
+# cat -> sm_roster の列名。 custom_id 由来の値を SQL に直接埋め込まないための固定マップ。
+_SCORE_COL: dict[str, str] = {
+    "good": "score_good",
+    "vgood": "score_vgood",
+    "bad": "score_bad",
+    "scam": "score_scam",
+    "bot": "score_bot",
+}
+# cat -> 絵文字 (Discord ボタン / ダッシュボード共通)。
+SCORE_EMOJI: dict[str, str] = {
+    "good": "👍",
+    "vgood": "🌟",
+    "bad": "👎",
+    "scam": "💀",
+    "bot": "🤖",
+}
+# ポジティブ判定に使うカテゴリ (prune 削除除外の対象)。
+_POSITIVE_CATEGORIES: tuple[str, ...] = ("good", "vgood")
+
 
 class WalletDB:
     def __init__(self, path: str = DEFAULT_DB_PATH):
@@ -111,7 +132,8 @@ class WalletDB:
     async def _ensure_columns(self) -> None:
         """既存 DB への列追加マイグレーション (冪等)。"""
         assert self._conn is not None
-        # sm_roster.rating: 手動レーティング (1-5)。 NULL=未評価。
+        # sm_roster.rating: 旧・手動レーティング (1-5)。 累積スコアへ移行済みで現在は未使用
+        # だが、 過去データ保全のため列自体は残す (DROP しない)。
         async with self._conn.execute("PRAGMA table_info(sm_roster)") as cur:
             cols = {row[1] for row in await cur.fetchall()}
         if "rating" not in cols:
@@ -122,45 +144,95 @@ class WalletDB:
             await self._conn.execute(
                 "ALTER TABLE sm_roster ADD COLUMN rating_note TEXT"
             )
+        # 累積スコア列 (score_good 等)。 5 カテゴリ × カウント。
+        score_good_added = False
+        for col in _SCORE_COL.values():
+            if col not in cols:
+                await self._conn.execute(
+                    f"ALTER TABLE sm_roster ADD COLUMN {col} INTEGER NOT NULL DEFAULT 0"
+                )
+                if col == "score_good":
+                    score_good_added = True
+        # ★rating → 「良い」へ一度だけ統合 (score_good 列を新規追加した時のみ)。
+        # 星数に関わらず score_good=1 (一旦「良い」に1カウント)。
+        if score_good_added:
+            await self._conn.execute(
+                "UPDATE sm_roster SET score_good = 1 WHERE rating IS NOT NULL"
+            )
 
-    async def set_wallet_rating(
-        self, wallet: str, rating: int | None, *, note: str | None = None
-    ) -> None:
-        """wallet に手動レーティング (1-5, None で解除) を設定。
+    async def increment_wallet_score(
+        self, wallet: str, category: str
+    ) -> dict[str, int]:
+        """wallet の指定カテゴリの累積カウントを +1 し、 5 カテゴリの新カウントを返す。
 
-        sm_roster に行が無ければ最小限の値で作成してから rating を入れる。
+        sm_roster に行が無ければ最小限の値で作成してから加算する。
+        category は SCORE_CATEGORIES のいずれか (不正値は ValueError)。
         """
         assert self._conn is not None
+        col = _SCORE_COL.get(category)
+        if col is None:
+            raise ValueError(f"unknown score category: {category!r}")
         now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        # 行が無ければ最小限で作成 (スコアは全て 0 のまま)。
         await self._conn.execute(
             """
             INSERT INTO sm_roster (wallet_address, first_seen_at, last_seen_at,
-                                   total_observations, rating, rating_note)
-            VALUES (?, ?, ?, 0, ?, ?)
-            ON CONFLICT(wallet_address) DO UPDATE SET
-                rating = excluded.rating,
-                rating_note = excluded.rating_note
+                                   total_observations)
+            VALUES (?, ?, ?, 0)
+            ON CONFLICT(wallet_address) DO NOTHING
             """,
-            (wallet, now_iso, now_iso, rating, note),
+            (wallet, now_iso, now_iso),
+        )
+        # col は _SCORE_COL の値 (固定文字列) なので f-string 埋め込みは安全。
+        await self._conn.execute(
+            f"UPDATE sm_roster SET {col} = {col} + 1 WHERE wallet_address = ?",
+            (wallet,),
+        )
+        await self._conn.commit()
+        cols_sql = ", ".join(_SCORE_COL[c] for c in SCORE_CATEGORIES)
+        async with self._conn.execute(
+            f"SELECT {cols_sql} FROM sm_roster WHERE wallet_address = ?",
+            (wallet,),
+        ) as cur:
+            row = await cur.fetchone()
+        return {
+            c: int(row[i] or 0) for i, c in enumerate(SCORE_CATEGORIES)
+        } if row else {c: 0 for c in SCORE_CATEGORIES}
+
+    async def reset_wallet_scores(self, wallet: str) -> None:
+        """wallet の全カテゴリスコアを 0 に戻す。"""
+        assert self._conn is not None
+        set_sql = ", ".join(f"{col} = 0" for col in _SCORE_COL.values())
+        await self._conn.execute(
+            f"UPDATE sm_roster SET {set_sql} WHERE wallet_address = ?",
+            (wallet,),
         )
         await self._conn.commit()
 
-    async def get_wallet_ratings(self) -> dict[str, int]:
-        """rating が設定された wallet の {wallet_address: rating} dict。"""
+    async def get_wallet_scores(self) -> dict[str, dict[str, int]]:
+        """いずれかのカウント>0 の wallet を {wallet: {good,..,bot}} で返す。"""
         assert self._conn is not None
+        cols_sql = ", ".join(_SCORE_COL[c] for c in SCORE_CATEGORIES)
+        any_positive = " OR ".join(f"{col} > 0" for col in _SCORE_COL.values())
+        result: dict[str, dict[str, int]] = {}
         async with self._conn.execute(
-            "SELECT wallet_address, rating FROM sm_roster "
-            "WHERE rating IS NOT NULL"
+            f"SELECT wallet_address, {cols_sql} FROM sm_roster WHERE {any_positive}"
         ) as cur:
-            return {row[0]: int(row[1]) for row in await cur.fetchall()}
+            for row in await cur.fetchall():
+                result[row[0]] = {
+                    c: int(row[i + 1] or 0) for i, c in enumerate(SCORE_CATEGORIES)
+                }
+        return result
 
-    async def list_rated_wallets(self) -> list[aiosqlite.Row]:
-        """rating 付き wallet 一覧 (rating 降順)。"""
+    async def list_scored_wallets(self) -> list[aiosqlite.Row]:
+        """スコアが付いた wallet 一覧 (良い→非常に良い 重視で降順)。"""
         assert self._conn is not None
+        cols_sql = ", ".join(_SCORE_COL[c] for c in SCORE_CATEGORIES)
+        any_positive = " OR ".join(f"{col} > 0" for col in _SCORE_COL.values())
         async with self._conn.execute(
-            "SELECT wallet_address, rating, rating_note, last_label "
-            "FROM sm_roster WHERE rating IS NOT NULL "
-            "ORDER BY rating DESC, wallet_address"
+            f"SELECT wallet_address, last_label, {cols_sql} "
+            f"FROM sm_roster WHERE {any_positive} "
+            "ORDER BY score_vgood DESC, score_good DESC, wallet_address"
         ) as cur:
             return await cur.fetchall()
 
@@ -375,6 +447,10 @@ class WalletDB:
             → 最後に観測されたのが古く、 観測回数も少ない wallet から優先削除。
             recency-first だが同日 last_seen なら observation count で tie-break。
 
+        ポジティブスコア (良い/非常に良い のいずれか > 0) が付いた wallet は
+        削除対象から除外する。 保護対象が多く上限を満たせない場合は、 実件数が
+        上限を上回ったまま残す (ポジティブ保護を優先)。
+
         max_count <= 0 のときは何もせず 0 を返す (無制限扱い)。
         返り値は削除件数。
         """
@@ -387,9 +463,13 @@ class WalletDB:
         if total <= max_count:
             return 0
         over = total - max_count
+        positive_pred = " OR ".join(
+            f"{_SCORE_COL[c]} > 0" for c in _POSITIVE_CATEGORIES
+        )
         async with self._conn.execute(
-            """
+            f"""
             SELECT wallet_address FROM sm_roster
+            WHERE NOT ({positive_pred})
             ORDER BY last_seen_at ASC, total_observations ASC
             LIMIT ?
             """,
@@ -542,7 +622,11 @@ class WalletDB:
                      THEN ABS(e.quote_change) ELSE 0 END)                AS sum_stable,
             MAX(e.block_ts)                                              AS last_ts,
             MAX(r.last_label)                                            AS label,
-            MAX(r.rating)                                                AS rating
+            MAX(r.score_good)                                            AS score_good,
+            MAX(r.score_vgood)                                           AS score_vgood,
+            MAX(r.score_bad)                                             AS score_bad,
+            MAX(r.score_scam)                                            AS score_scam,
+            MAX(r.score_bot)                                             AS score_bot
         FROM sm_signal_events e
         LEFT JOIN sm_roster r ON r.wallet_address = e.wallet
         WHERE e.target_mint = ? AND e.direction = 'BUY' AND e.block_ts >= ?
@@ -575,7 +659,11 @@ class WalletDB:
             e.target_change             AS target_change,
             e.is_large                  AS is_large,
             r.last_label                AS label,
-            r.rating                    AS rating
+            r.score_good                AS score_good,
+            r.score_vgood               AS score_vgood,
+            r.score_bad                 AS score_bad,
+            r.score_scam                AS score_scam,
+            r.score_bot                 AS score_bot
         FROM sm_signal_events e
         LEFT JOIN sm_roster r ON r.wallet_address = e.wallet
         WHERE e.target_mint = ? AND e.block_ts >= ?

@@ -563,9 +563,23 @@ function updateChart() {
   });
 }
 
-function starsStr(r) {
-  const n = parseInt(r, 10);
-  return Number.isFinite(n) && n > 0 ? "⭐".repeat(n) : "";
+// 累積スコア (5 カテゴリ) の表示順と絵文字。 bot 側 SCORE_CATEGORIES と一致させる。
+const SCORE_CATS = [
+  { key: "good", emoji: "👍" },
+  { key: "vgood", emoji: "🌟" },
+  { key: "bad", emoji: "👎" },
+  { key: "scam", emoji: "💀" },
+  { key: "bot", emoji: "🤖" },
+];
+
+// scores({good,vgood,bad,scam,bot}) を 5 枠のスコアセル HTML に。 0 は淡色表示。
+function scoreCells(scores) {
+  const s = scores || {};
+  const slots = SCORE_CATS.map(({ key, emoji }) => {
+    const n = parseInt(s[key], 10) || 0;
+    return `<span class="score-slot${n > 0 ? "" : " zero"}" title="${key}">${emoji}${n}</span>`;
+  });
+  return `<span class="score-cell">${slots.join("")}</span>`;
 }
 
 function renderBuyers(t) {
@@ -581,10 +595,10 @@ function renderBuyers(t) {
     const labelHtml = b.label
       ? `<span class="label-cell" title="${escapeHtml(b.label)}">${escapeHtml(b.label)}</span>`
       : `<span class="label-cell empty">-</span>`;
-    const star = starsStr(b.rating);
     li.innerHTML = `
-      <span class="wallet" title="${escapeHtml(b.wallet || "")}">${star ? `<span class="rating">${star}</span> ` : ""}${shortAddr(b.wallet)}</span>
+      <span class="wallet" title="${escapeHtml(b.wallet || "")}">${shortAddr(b.wallet)}</span>
       ${labelHtml}
+      ${scoreCells(b.scores)}
       <span class="trades">${b.trades || 0}</span>
       <span class="amount">${amount}</span>
       <span class="ts">
@@ -620,8 +634,9 @@ function renderEvents(t) {
         <span class="ago">${fmtAgo(ev.ts)}</span>
       </span>
       <span class="dir ${isBuy ? "buy" : "sell"}">${isBuy ? "BUY" : "SELL"}</span>
-      <span class="wallet" title="${escapeHtml(ev.wallet || "")}">${(() => { const s = starsStr(ev.rating); return s ? `<span class="rating">${s}</span> ` : ""; })()}${shortAddr(ev.wallet)}</span>
+      <span class="wallet" title="${escapeHtml(ev.wallet || "")}">${shortAddr(ev.wallet)}</span>
       ${labelHtml}
+      ${scoreCells(ev.scores)}
       <span class="amount ${isBuy ? "buy" : "sell"}">${amount}${ev.is_large ? " 🐋" : ""}</span>
     `;
     frag.append(li);

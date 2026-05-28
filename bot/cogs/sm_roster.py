@@ -30,7 +30,7 @@ from discord.ext import commands
 from bot.config import Config
 from bot.helius_webhook import HeliusWebhookClient, HeliusWebhookError
 from bot.nansen_client import NansenClient
-from bot.wallet_db import WalletDB
+from bot.wallet_db import SCORE_CATEGORIES, SCORE_EMOJI, WalletDB
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +57,13 @@ def _short(addr: str | None) -> str:
     if len(addr) <= 10:
         return addr
     return f"{addr[:4]}…{addr[-4:]}"
+
+
+def _fmt_score_counts(counts: dict[str, int]) -> str:
+    """{cat: count} を 絵文字+件数 の文字列に (全カテゴリ表示)。"""
+    return " ".join(
+        f"{SCORE_EMOJI[c]}{int(counts.get(c, 0))}" for c in SCORE_CATEGORIES
+    )
 
 
 def _aggregate_roster(data: list[dict]) -> list[dict]:
@@ -474,20 +481,27 @@ class SmRosterCog(commands.Cog):
         )
 
     @app_commands.command(
-        name="sm-rate",
-        description="wallet に手動レーティング (1-5) を付けます。 通知/ダッシュボードに ⭐ 表示",
+        name="sm-score",
+        description="wallet にカテゴリ別スコアを +1 します (累積)。 通知/ダッシュボードに反映",
     )
     @app_commands.describe(
         wallet="対象 wallet アドレス",
-        rating="1〜5 (高いほど良い)",
-        note="任意メモ (なぜ良い wallet か等)",
+        category="付与するスコアのカテゴリ",
     )
-    async def sm_rate(
+    @app_commands.choices(
+        category=[
+            app_commands.Choice(name=f"{SCORE_EMOJI['good']} 良い", value="good"),
+            app_commands.Choice(name=f"{SCORE_EMOJI['vgood']} 非常に良い", value="vgood"),
+            app_commands.Choice(name=f"{SCORE_EMOJI['bad']} 駄目", value="bad"),
+            app_commands.Choice(name=f"{SCORE_EMOJI['scam']} SCAM", value="scam"),
+            app_commands.Choice(name=f"{SCORE_EMOJI['bot']} bot", value="bot"),
+        ]
+    )
+    async def sm_score(
         self,
         interaction: discord.Interaction,
         wallet: str,
-        rating: app_commands.Range[int, 1, 5],
-        note: str | None = None,
+        category: app_commands.Choice[str],
     ):
         if self._channel_blocked(interaction):
             await interaction.response.send_message(
@@ -503,25 +517,25 @@ class SmRosterCog(commands.Cog):
         await interaction.response.defer(thinking=True, ephemeral=True)
         try:
             async with WalletDB() as db:
-                await db.set_wallet_rating(wallet, int(rating), note=note)
+                counts = await db.increment_wallet_score(wallet, category.value)
         except Exception:
-            logger.exception("/sm-rate 失敗 wallet=%s", wallet)
+            logger.exception("/sm-score 失敗 wallet=%s", wallet)
             await interaction.followup.send(
                 "DB 更新でエラーが発生しました。", ephemeral=True
             )
             return
-        stars = "⭐" * int(rating)
-        msg = f"`{wallet}` を {stars} (rating={int(rating)}) に設定しました。"
-        if note:
-            msg += f"\nメモ: {note}"
-        await interaction.followup.send(msg, ephemeral=True)
+        await interaction.followup.send(
+            f"`{wallet}` に {SCORE_EMOJI[category.value]} を付与しました。\n"
+            f"現在: {_fmt_score_counts(counts)}",
+            ephemeral=True,
+        )
 
     @app_commands.command(
-        name="sm-unrate",
-        description="wallet の手動レーティングを解除します",
+        name="sm-unscore",
+        description="wallet の全カテゴリスコアを 0 にリセットします",
     )
     @app_commands.describe(wallet="対象 wallet アドレス")
-    async def sm_unrate(self, interaction: discord.Interaction, wallet: str):
+    async def sm_unscore(self, interaction: discord.Interaction, wallet: str):
         if self._channel_blocked(interaction):
             await interaction.response.send_message(
                 "このチャネルではコマンドが許可されていません。", ephemeral=True
@@ -531,22 +545,22 @@ class SmRosterCog(commands.Cog):
         await interaction.response.defer(thinking=True, ephemeral=True)
         try:
             async with WalletDB() as db:
-                await db.set_wallet_rating(wallet, None, note=None)
+                await db.reset_wallet_scores(wallet)
         except Exception:
-            logger.exception("/sm-unrate 失敗 wallet=%s", wallet)
+            logger.exception("/sm-unscore 失敗 wallet=%s", wallet)
             await interaction.followup.send(
                 "DB 更新でエラーが発生しました。", ephemeral=True
             )
             return
         await interaction.followup.send(
-            f"`{wallet}` のレーティングを解除しました。", ephemeral=True
+            f"`{wallet}` のスコアをリセットしました。", ephemeral=True
         )
 
     @app_commands.command(
-        name="sm-ratings",
-        description="手動レーティング付き wallet 一覧を表示します",
+        name="sm-scores",
+        description="スコアが付いた wallet 一覧を表示します",
     )
-    async def sm_ratings(self, interaction: discord.Interaction):
+    async def sm_scores(self, interaction: discord.Interaction):
         if self._channel_blocked(interaction):
             await interaction.response.send_message(
                 "このチャネルではコマンドが許可されていません。", ephemeral=True
@@ -555,30 +569,28 @@ class SmRosterCog(commands.Cog):
         await interaction.response.defer(thinking=True)
         try:
             async with WalletDB() as db:
-                rows = await db.list_rated_wallets()
+                rows = await db.list_scored_wallets()
         except Exception:
-            logger.exception("/sm-ratings 失敗")
+            logger.exception("/sm-scores 失敗")
             await interaction.followup.send(
                 "DB アクセスでエラーが発生しました。", ephemeral=True
             )
             return
         if not rows:
             await interaction.followup.send(
-                "レーティング済み wallet はありません。", ephemeral=True
+                "スコア付き wallet はありません。", ephemeral=True
             )
             return
         lines: list[str] = []
         for r in rows[:40]:
             d = dict(r)
-            stars = "⭐" * int(d.get("rating") or 0)
+            counts = {c: int(d.get(f"score_{c}") or 0) for c in SCORE_CATEGORIES}
             label = d.get("last_label") or "-"
-            note = d.get("rating_note")
-            line = f"{stars} `{d['wallet_address']}` ({label})"
-            if note:
-                line += f" — {note}"
-            lines.append(line)
+            lines.append(
+                f"{_fmt_score_counts(counts)} `{d['wallet_address']}` ({label})"
+            )
         embed = discord.Embed(
-            title=f"⭐ レーティング済み wallet ({len(rows)})",
+            title=f"🏷️ スコア付き wallet ({len(rows)})",
             description="\n".join(lines),
             color=0xFFD700,
         )

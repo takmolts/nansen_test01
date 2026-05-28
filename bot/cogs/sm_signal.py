@@ -37,7 +37,7 @@ from bot.sm_signal_classifier import (
     wallet_net_by_mint,
 )
 from bot.token_info import TokenInfo, get_token_info
-from bot.views import build_rating_view
+from bot.views import build_score_view
 from bot.wallet_db import WalletDB
 
 logger = logging.getLogger(__name__)
@@ -124,7 +124,7 @@ class SmSignalCog(commands.Cog):
         self.config = config
         self._sm_wallets: set[str] = set()
         self._sm_wallet_labels: dict[str, str] = {}
-        self._sm_wallet_ratings: dict[str, int] = {}
+        self._sm_wallet_scores: dict[str, dict[str, int]] = {}
         self._wallets_last_refresh: float = 0.0
         self._state = _SignalState(
             dedup_window_sec=config.sm_signal_dedup_window_min * 60,
@@ -242,10 +242,10 @@ class SmSignalCog(commands.Cog):
             async with WalletDB() as db:
                 wallets = await db.list_all_sm_wallets()
                 labels = await db.get_sm_wallet_labels()
-                ratings = await db.get_wallet_ratings()
+                scores = await db.get_wallet_scores()
             self._sm_wallets = set(wallets)
             self._sm_wallet_labels = labels
-            self._sm_wallet_ratings = ratings
+            self._sm_wallet_scores = scores
             self._wallets_last_refresh = now
             logger.debug(
                 "[sm_signal] sm wallets refreshed: %d (labels=%d)",
@@ -479,8 +479,8 @@ class SmSignalCog(commands.Cog):
 
         wallet_label = self._sm_wallet_labels.get(wallet)
         others_labels = {w: self._sm_wallet_labels.get(w) for w in others}
-        wallet_rating = self._sm_wallet_ratings.get(wallet)
-        others_ratings = {w: self._sm_wallet_ratings.get(w) for w in others}
+        wallet_scores = self._sm_wallet_scores.get(wallet)
+        others_scores = {w: self._sm_wallet_scores.get(w) for w in others}
 
         embed = _build_signal_embed(
             event=event,
@@ -491,11 +491,11 @@ class SmSignalCog(commands.Cog):
             token_info=token_info,
             wallet_label=wallet_label,
             others_labels=others_labels,
-            wallet_rating=wallet_rating,
-            others_ratings=others_ratings,
+            wallet_scores=wallet_scores,
+            others_scores=others_scores,
         )
         try:
-            await thread.send(embed=embed, view=build_rating_view(wallet))
+            await thread.send(embed=embed, view=build_score_view(wallet))
         except Exception:
             logger.exception("[sm_signal] 通知投稿失敗")
 
@@ -534,13 +534,18 @@ def _fmt_usd(v: float) -> str:
     return f"{sign}${a:.0f}"
 
 
-def _stars(rating: int | None) -> str:
-    """rating(1-5) を ⭐ 文字列に。 None/0 は空文字。"""
-    try:
-        n = int(rating) if rating else 0
-    except (TypeError, ValueError):
-        n = 0
-    return "⭐" * n
+def _fmt_scores(counts: dict[str, int] | None) -> str:
+    """カテゴリ別カウントを 絵文字+件数 (非ゼロのみ) の文字列に。 全0/None は空文字。"""
+    from bot.wallet_db import SCORE_CATEGORIES, SCORE_EMOJI
+
+    if not counts:
+        return ""
+    parts = [
+        f"{SCORE_EMOJI[c]}{int(counts.get(c, 0))}"
+        for c in SCORE_CATEGORIES
+        if int(counts.get(c, 0) or 0) > 0
+    ]
+    return " ".join(parts)
 
 
 def _build_signal_embed(
@@ -553,8 +558,8 @@ def _build_signal_embed(
     token_info: TokenInfo | None = None,
     wallet_label: str | None = None,
     others_labels: dict[str, str | None] | None = None,
-    wallet_rating: int | None = None,
-    others_ratings: dict[str, int | None] | None = None,
+    wallet_scores: dict[str, int] | None = None,
+    others_scores: dict[str, dict[str, int] | None] | None = None,
 ) -> discord.Embed:
     direction = cls["direction"]
     target_mint = cls["target_mint"]
@@ -573,8 +578,9 @@ def _build_signal_embed(
     wallet_disp = _short(wallet)
     if wallet_label:
         wallet_disp = f"{wallet_disp} ({wallet_label})"
-    rating_prefix = f"{_stars(wallet_rating)} " if wallet_rating else ""
-    title = f"{dir_emoji} {dir_word}  ·  {rating_prefix}{wallet_disp}"
+    score_str = _fmt_scores(wallet_scores)
+    score_prefix = f"{score_str}  " if score_str else ""
+    title = f"{dir_emoji} {dir_word}  ·  {score_prefix}{wallet_disp}"
 
     embed = discord.Embed(title=title, color=color)
     if token_info and token_info.image_url:
@@ -596,8 +602,8 @@ def _build_signal_embed(
     nansen_url = f"https://app.nansen.ai/profiler/{wallet}?chain=solana"
     solscan_wallet = f"https://solscan.io/account/{wallet}"
     wallet_line = f"`{_short(wallet)}`"
-    if wallet_rating:
-        wallet_line += f" {_stars(wallet_rating)}"
+    if score_str:
+        wallet_line += f" {score_str}"
     if wallet_label:
         wallet_line += f" **{wallet_label}**"
     wallet_line += f" · [solscan]({solscan_wallet}) · [Nansen]({nansen_url})"
@@ -635,14 +641,14 @@ def _build_signal_embed(
     # 群衆メンバー詳細 (label 付きで表示)。 名前数が多くなるので field のまま
     if others:
         ol = others_labels or {}
-        orr = others_ratings or {}
+        osc = others_scores or {}
         items: list[str] = []
         for w in list(others)[:5]:
             short = _short(w)
             lbl = ol.get(w)
-            star = _stars(orr.get(w))
+            score = _fmt_scores(osc.get(w))
             disp = f"{short} ({lbl})" if lbl else short
-            items.append(f"{star} {disp}" if star else disp)
+            items.append(f"{score} {disp}" if score else disp)
         sample = ", ".join(items)
         more = f" ほか {len(others)-5}" if len(others) > 5 else ""
         embed.add_field(

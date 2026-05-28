@@ -24,9 +24,14 @@ from pathlib import Path
 from typing import Any
 
 from bot.token_info import get_token_infos
-from bot.wallet_db import DEFAULT_DB_PATH, WalletDB
+from bot.wallet_db import DEFAULT_DB_PATH, SCORE_CATEGORIES, WalletDB
 
 logger = logging.getLogger(__name__)
+
+
+def _scores_of(row: dict[str, Any]) -> dict[str, int]:
+    """buyer/event 行から 5 カテゴリの累積スコアを {good,..,bot} で抽出。"""
+    return {c: int(row.get(f"score_{c}") or 0) for c in SCORE_CATEGORIES}
 
 # 期間 (label, hours)
 DEFAULT_WINDOWS: list[tuple[str, int]] = [
@@ -95,9 +100,7 @@ async def _build_window_payload(
                 {
                     "wallet": b.get("wallet"),
                     "label": b.get("label"),
-                    "rating": (
-                        int(b["rating"]) if b.get("rating") is not None else None
-                    ),
+                    "scores": _scores_of(b),
                     "trades": int(b.get("trades") or 0),
                     "sum_sol": float(b.get("sum_sol") or 0.0),
                     "sum_stable": float(b.get("sum_stable") or 0.0),
@@ -110,9 +113,7 @@ async def _build_window_payload(
                     "ts": int(e.get("block_ts") or 0),
                     "wallet": e.get("wallet"),
                     "label": e.get("label"),
-                    "rating": (
-                        int(e["rating"]) if e.get("rating") is not None else None
-                    ),
+                    "scores": _scores_of(e),
                     "direction": e.get("direction"),
                     "quote_label": e.get("quote_label"),
                     "quote_change": float(e.get("quote_change") or 0.0),

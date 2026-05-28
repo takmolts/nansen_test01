@@ -234,8 +234,20 @@ input[type=number] { width: 60px; }
 }
 .watch-del:hover { color: var(--sell); border-color: var(--sell); }
 .token-list .muted-tag { color: var(--muted); font-style: italic; }
-.buyers .wallet .rating,
-#events-list .wallet .rating { font-size: 10px; letter-spacing: -1px; }
+/* 累積スコア 5 枠セル (buyers / events 共通)。 スマホでも改行しにくいよう nowrap。 */
+.score-cell {
+  display: inline-flex;
+  gap: 4px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.score-slot {
+  font-size: 11px;
+  line-height: 1;
+  color: var(--text);
+  white-space: nowrap;
+}
+.score-slot.zero { color: var(--border); }
 .token-list li.selected { background: var(--accent-2); }
 .token-list .icon {
   width: 32px; height: 32px;
@@ -485,6 +497,7 @@ a.action-btn:hover { text-decoration: none; }
   grid-template-columns:
     minmax(90px, auto)   /* ウォレット */
     minmax(60px, 1fr)    /* ラベル */
+    minmax(120px, auto)  /* スコア */
     44px                  /* 取引数 */
     minmax(70px, auto)   /* 合計 */
     minmax(95px, auto);  /* 最終 */
@@ -528,6 +541,7 @@ a.action-btn:hover { text-decoration: none; }
     44px                  /* 方向 */
     minmax(90px, auto)   /* ウォレット */
     minmax(60px, 1fr)    /* ラベル */
+    minmax(120px, auto)  /* スコア */
     minmax(80px, auto);  /* 金額 */
   gap: 10px;
   align-items: baseline;

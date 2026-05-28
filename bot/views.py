@@ -12,14 +12,75 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _short_wallet(wallet: str) -> str:
+    return f"{wallet[:4]}…{wallet[-4:]}" if len(wallet) > 10 else wallet
+
+
+def _fmt_score_counts(counts: dict[str, int]) -> str:
+    """{cat: count} を 絵文字+件数 の文字列に (全カテゴリ表示)。"""
+    from bot.wallet_db import SCORE_CATEGORIES, SCORE_EMOJI
+
+    return " ".join(
+        f"{SCORE_EMOJI[c]}{int(counts.get(c, 0))}" for c in SCORE_CATEGORIES
+    )
+
+
+class ScoreWalletButton(
+    discord.ui.DynamicItem[discord.ui.Button],
+    template=r"smc:(?P<wallet>[^:]+):(?P<cat>good|vgood|bad|scam|bot)",
+):
+    """wallet にカテゴリ別スコアを累積付与する persistent ボタン。
+
+    custom_id に wallet と category を埋め込むことで、 bot 再起動後も
+    `bot.add_dynamic_items(ScoreWalletButton)` 登録だけで全通知のボタンが効く。
+    押すたびに該当カテゴリのカウントが +1 される。
+    """
+
+    def __init__(self, wallet: str, cat: str):
+        self.wallet = wallet
+        self.cat = cat
+        from bot.wallet_db import SCORE_EMOJI
+
+        super().__init__(
+            discord.ui.Button(
+                emoji=SCORE_EMOJI[cat],
+                style=discord.ButtonStyle.secondary,
+                custom_id=f"smc:{wallet}:{cat}",
+            )
+        )
+
+    @classmethod
+    async def from_custom_id(cls, interaction, item, match):
+        return cls(match["wallet"], match["cat"])
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        # 遅延 import (views.py -> wallet_db の循環を避ける)
+        from bot.wallet_db import SCORE_EMOJI, WalletDB
+
+        try:
+            async with WalletDB() as db:
+                counts = await db.increment_wallet_score(self.wallet, self.cat)
+        except Exception:
+            logger.exception("score ボタン: DB 更新失敗 wallet=%s", self.wallet)
+            await interaction.response.send_message(
+                "スコアの保存に失敗しました。", ephemeral=True
+            )
+            return
+        await interaction.response.send_message(
+            f"`{_short_wallet(self.wallet)}` に {SCORE_EMOJI[self.cat]} を付与しました。\n"
+            f"現在: {_fmt_score_counts(counts)}",
+            ephemeral=True,
+        )
+
+
 class RateWalletButton(
     discord.ui.DynamicItem[discord.ui.Button],
     template=r"smr:(?P<wallet>[^:]+):(?P<n>[1-5])",
 ):
-    """wallet に rating(1-5) をワンクリックで付与する persistent ボタン。
+    """旧 ★1-5 ボタンの後方互換ハンドラ。
 
-    custom_id に wallet と rating を埋め込むことで、 bot 再起動後も
-    `bot.add_dynamic_items(RateWalletButton)` 登録だけで全通知のボタンが効く。
+    既出通知に残る custom_id `smr:...` がクリックされても失敗しないよう、
+    クリックを「良い (score_good) +1」に振り替える。 新規通知では使わない。
     """
 
     def __init__(self, wallet: str, n: int):
@@ -38,33 +99,31 @@ class RateWalletButton(
         return cls(match["wallet"], int(match["n"]))
 
     async def callback(self, interaction: discord.Interaction) -> None:
-        # 遅延 import (views.py -> wallet_db の循環を避ける)
-        from bot.wallet_db import WalletDB
+        from bot.wallet_db import SCORE_EMOJI, WalletDB
 
         try:
             async with WalletDB() as db:
-                await db.set_wallet_rating(self.wallet, self.n)
+                counts = await db.increment_wallet_score(self.wallet, "good")
         except Exception:
-            logger.exception("rate ボタン: DB 更新失敗 wallet=%s", self.wallet)
+            logger.exception("rate ボタン(旧): DB 更新失敗 wallet=%s", self.wallet)
             await interaction.response.send_message(
-                "レーティングの保存に失敗しました。", ephemeral=True
+                "スコアの保存に失敗しました。", ephemeral=True
             )
             return
-        short = (
-            f"{self.wallet[:4]}…{self.wallet[-4:]}"
-            if len(self.wallet) > 10 else self.wallet
-        )
         await interaction.response.send_message(
-            f"`{short}` を {'⭐' * self.n} (rating={self.n}) に設定しました。",
+            f"`{_short_wallet(self.wallet)}` に {SCORE_EMOJI['good']} を付与しました。\n"
+            f"現在: {_fmt_score_counts(counts)}",
             ephemeral=True,
         )
 
 
-def build_rating_view(wallet: str) -> discord.ui.View:
-    """★1〜★5 の 5 ボタンを並べた persistent View を返す。"""
+def build_score_view(wallet: str) -> discord.ui.View:
+    """5 カテゴリの絵文字ボタンを 1 行に並べた persistent View を返す。"""
+    from bot.wallet_db import SCORE_CATEGORIES
+
     view = discord.ui.View(timeout=None)
-    for n in range(1, 6):
-        view.add_item(RateWalletButton(wallet, n))
+    for cat in SCORE_CATEGORIES:
+        view.add_item(ScoreWalletButton(wallet, cat))
     return view
 
 

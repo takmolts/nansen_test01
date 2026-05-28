@@ -34,7 +34,7 @@ from bot.cogs.check import AnalyzeButtonView
 from bot.config import Config
 from bot.links import research_links_md, trade_links_md, x_search_links_md
 from bot.token_info import TokenInfo, get_token_info, get_token_infos
-from bot.wallet_db import WalletDB
+from bot.wallet_db import SCORE_CATEGORIES, SCORE_EMOJI, WalletDB
 
 logger = logging.getLogger(__name__)
 
@@ -437,11 +437,12 @@ def _build_token_embed(r: dict, *, rank: int) -> discord.Embed:
             short = _short(w)
             lbl = b.get("label")
             base = f"{short} ({lbl})" if isinstance(lbl, str) and lbl else short
-            try:
-                n = int(b.get("rating") or 0)
-            except (TypeError, ValueError):
-                n = 0
-            return f"{'⭐' * n} {base}" if n else base
+            score = "".join(
+                f"{SCORE_EMOJI[c]}{int(b.get(f'score_{c}') or 0)}"
+                for c in SCORE_CATEGORIES
+                if int(b.get(f"score_{c}") or 0) > 0
+            )
+            return f"{score} {base}" if score else base
 
         sample = ", ".join(_disp(b) for b in buyers[:5])
         more = f" +{len(buyers)-5}" if len(buyers) > 5 else ""
