@@ -62,6 +62,9 @@ class Config:
     sm_summary_realtime_whale_sol_min: float
     sm_summary_realtime_whale_stable_min: float
     sm_summary_realtime_cooldown_min: int
+    sm_summary_realtime_min_liquidity_usd: float
+    sm_summary_realtime_require_image: bool
+    sm_summary_realtime_require_price: bool
     dashboard_publish_enabled: bool
     dashboard_repo_path: str | None
     dashboard_publish_interval_min: int
@@ -256,6 +259,16 @@ class Config:
         sm_summary_realtime_cooldown_min = _int_env(
             "SM_SUMMARY_REALTIME_COOLDOWN_MIN", 60
         )
+        # 速報の品質フィルタ: 低流動性(スキャム代理)・画像/価格欠損を抑制する閾値。
+        sm_summary_realtime_min_liquidity_usd = _float_env(
+            "SM_SUMMARY_REALTIME_MIN_LIQUIDITY_USD", 5000.0
+        )
+        sm_summary_realtime_require_image = _parse_bool(
+            os.getenv("SM_SUMMARY_REALTIME_REQUIRE_IMAGE"), default=True
+        )
+        sm_summary_realtime_require_price = _parse_bool(
+            os.getenv("SM_SUMMARY_REALTIME_REQUIRE_PRICE"), default=True
+        )
 
         dashboard_publish_enabled = _parse_bool(
             os.getenv("DASHBOARD_PUBLISH_ENABLED"), default=False
@@ -338,6 +351,9 @@ class Config:
             sm_summary_realtime_whale_sol_min=sm_summary_realtime_whale_sol_min,
             sm_summary_realtime_whale_stable_min=sm_summary_realtime_whale_stable_min,
             sm_summary_realtime_cooldown_min=sm_summary_realtime_cooldown_min,
+            sm_summary_realtime_min_liquidity_usd=sm_summary_realtime_min_liquidity_usd,
+            sm_summary_realtime_require_image=sm_summary_realtime_require_image,
+            sm_summary_realtime_require_price=sm_summary_realtime_require_price,
             dashboard_publish_enabled=dashboard_publish_enabled,
             dashboard_repo_path=dashboard_repo_path,
             dashboard_publish_interval_min=dashboard_publish_interval_min,

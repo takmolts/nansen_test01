@@ -69,6 +69,29 @@ def _fmt_sol(v: float) -> str:
     return f"{a:.3f}"
 
 
+def _realtime_suppress_reason(
+    token_info: TokenInfo | None,
+    *,
+    min_liquidity_usd: float,
+    require_image: bool,
+    require_price: bool,
+) -> str | None:
+    """速報を抑制すべきかを判定し、 理由文字列を返す (通過時は None)。
+
+    スキャム/初動ノイズ除去のための品質フィルタ。 ウォレット個別通知・DB集計には影響しない。
+    """
+    if token_info is None:
+        return "no_token_info"  # mcap も画像も一切出せない
+    if require_price and (token_info.market_cap is None or token_info.price_usd is None):
+        return "no_price"
+    if require_image and not token_info.image_url:
+        return "no_image"
+    liq = token_info.liquidity_usd
+    if liq is None or liq < min_liquidity_usd:
+        return "low_liquidity"
+    return None
+
+
 def _score(row: dict) -> float:
     distinct_buyers = int(row.get("distinct_buyers") or 0)
     buy_trades = int(row.get("buy_trades") or 0)
@@ -285,6 +308,20 @@ class SmSummaryCog(commands.Cog):
                 "[sm_summary:realtime] token_info 取得失敗 mint=%s",
                 target_mint, exc_info=True,
             )
+
+        # 品質フィルタ: 低流動性/画像・価格欠損の速報を抑制 (cooldown は立てないので
+        # 条件が整えば後続 BUY で再判定される)。
+        reason = _realtime_suppress_reason(
+            token_info,
+            min_liquidity_usd=self.config.sm_summary_realtime_min_liquidity_usd,
+            require_image=self.config.sm_summary_realtime_require_image,
+            require_price=self.config.sm_summary_realtime_require_price,
+        )
+        if reason:
+            logger.info(
+                "[sm_summary:realtime] suppress mint=%s reason=%s", target_mint, reason
+            )
+            return
 
         embed = _build_realtime_embed(
             event=event,
