@@ -242,12 +242,14 @@ input[type=number] { width: 60px; }
   font-variant-numeric: tabular-nums;
 }
 .score-slot {
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1;
   color: var(--text);
+  font-weight: 700;
+  letter-spacing: 0.5px;
   white-space: nowrap;
 }
-.score-slot.zero { color: var(--border); }
+.score-slot.zero { color: var(--muted); font-weight: 400; }
 .token-list li.selected { background: var(--accent-2); }
 .token-list .icon {
   width: 32px; height: 32px;
